@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<job name="DCPL_lm4">
+  <priority>10</priority>
+  <token>313e77c57480740596edbfd15bacfcae</token>
+  <timeout>600</timeout>
+  <optimizer name="systematic">
+    <setting name="population-size">10000</setting>
+    <parameters>
+      <parameter name="P0" min="0" max="9" steps="10"/> <!-- number of lesions -->
+      <parameter name="P1" min="0.5" max="2.0" steps="4"/> <!-- network frequency -->
+      <parameter name="P2" min="1.0" max="1.0" steps="1"/> <!-- torque: alpha -->
+      <parameter name="P3" min="2.0" max="2.0" steps="1"/> <!-- stiffness: gamma -->
+      <parameter name="P4" min="100" max="100" steps="1"/> <!-- phase lag percentage -->
+      <parameter name="P5" min="0" max="300" steps="4"/> <!-- fb gain -->
+    </parameters>
+    <fitness>
+      <expression>meanSpeed+meanStdSpeed+periodicSolution+isNAN+avgPhaseLagAct+avgPhaseLagKin+avgFrequency+avgZCStd</expression>
+    </fitness>
+  </optimizer>
+  <dispatcher name="webots">
+    <setting name="webotsPath">/usr/local/webots644/webots</setting>
+    <setting name="webotsVersion">6.4.4</setting>
+    <!-- Replace YOUR_PATH with the absolute path to the example
+         world directory -->
+    <setting name="world">/home/thandiac/Documents/EPFL/Projects/49_SF_swimming_study/022-webots-anguilliform-swimming/worlds/anguilliformrobot_segment10_tail4.wbt</setting>
+    <!-- <setting name="world">/home/robin/EPFL_HOME/home/thandiac/Documents/EPFL/Projects/49_SF_swimming_study/022-webots-anguilliform-swimming/worlds/anguilliformrobot_segment10_tail4.wbt</setting> -->
+    <!-- Use 'run' for debugging, 'batch' for optimization -->
+    <setting name="mode">batch</setting>
+    <!-- Parameters to be optimized -->
+    <setting name="S0">30</setting>  <!-- maxtime -->
+    <setting name="S1">2</setting>  <!-- control mode: (0: open loop / 1: combined / 2: decoupled / 3: sensory-driven) -->
+    <setting name="S2">4</setting>  <!-- lesion mode: (0: oscillations / 1: coupling / 2: feedback / 3: motoneuron / 4: combined lesions) -->
+  </dispatcher>
+</job>
+<!-- vi:ex:ts=2:et -->

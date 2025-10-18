@@ -1,0 +1,90 @@
+# *************************************************************
+# Description:		cpg Matsuoka 3
+# Date:			24-05-2017
+# Author:		Kyoichi Akiyama
+# Modifications: 	-put together neuronA,B with feedback 
+# *************************************************************
+
+
+# *********** PARAMETERS *************
+defines
+{
+    N ?= 10 # ?= : if not yet defined
+}
+
+Beta	=  5.0#5.0
+Eta	    =  -3.0#-2.0
+Gamma	=  3.0#3.0
+Eta_i	=  -2#-2
+Eta_e   =  1#0.4
+Eta_head=  0#0.4   
+Tonic 	=  50#20
+Force   =  0.0
+
+Tau	    =  0.05
+FB_I    =  -10#-30
+FB_E    =  1#3
+
+# *********** TEMPLATE FOR OSCILLATORS ************* 
+templates{
+
+	node Oscillator{
+		x_a  = "rand(0.01,0.1)" 			
+		v_a  = "rand(0.01,0.1)" 
+		xx_a = "x_a*(x_a>0)"
+		
+		x_b  = "rand(0.01,0.1)" 			
+		v_b  = "rand(0.01,0.1)" 
+		xx_b = "x_b*(x_b>0)"
+
+		force_l = "force*(force>=0.0)"
+		force_r = "-force*(force<0.0)"
+
+		FB_c_a = "force_l*fb_i"
+		FB_i_a = "force_l*fb_e"
+		FB_c_b = "force_r*fb_i"
+		FB_i_b = "force_r*fb_e"
+
+#		if (x_a'>=0 || x'b>0)
+#		FB_c_a = "force_l*fb_i"
+#		FB_i_a = "force_l*fb_e"
+#		FB_c_b = "force_r*fb_i"
+#		FB_i_b = "force_r*fb_e"
+#		else
+#		FB_c_a = "-force_l*fb_i"
+#		FB_i_a = "-force_l*fb_e"
+#		FB_c_b = "-force_r*fb_i"
+#		FB_i_b = "-force_r*fb_e"		
+
+	    x_a' = "-1/tau * (x_a + b*v_a - e*xx_b - u) + FB_i_a + FB_c_b"
+		v_a' = "(-v_a + xx_a)/(tau*g)"
+
+	    x_b' = "-1/tau * (x_b + b*v_b - e*xx_a - u) + FB_c_a + FB_i_b"
+		v_b' = "(-v_b + xx_b)/(tau*g)"
+	}
+
+	edge coupling_ipsilateral{	
+		x_a' += "e/tau * input.x_a*(input.x_a>0)"	
+		x_b' += "e/tau * input.x_b*(input.x_b>0)"	
+	}
+
+	edge coupling_contralateral{	
+		x_a' += "e/tau * input.x_b*(input.x_b>0)"	
+		x_b' += "e/tau * input.x_a*(input.x_a>0)"	
+	}
+}
+
+# *********** OSCILLATOR CHAIN AND COUPLINGS *************#
+node "osc{1:@N}" : Oscillator {b=Beta u=Tonic g=Gamma e=Eta fb_i=FB_I fb_e=FB_E force=Force tau=Tau}
+
+#***inhibition diagonal downwards****#
+edge from "osc{1:@N}" to "osc{$(@1+1)}" : coupling_contralateral{e=Eta_i}
+
+#********excitation downwards********#
+edge from "osc{1:@N}" to "osc{$(@1+1)}" : coupling_ipsilateral{e=Eta_e}
+
+#********   self excitation  ********#
+edge from "osc{1}" to "osc{1}" : coupling_ipsilateral{e=Eta_head}
+
+# *********** LAYOUT (TO PRINT) *************#
+layout{"osc{1:@N}"   at 4,@[+++]}

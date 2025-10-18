@@ -1,0 +1,55 @@
+# *************************************************************
+# Description:		cpg phase oscillator single chain
+# Date:				19-11-2015
+# Author:			Robin Thandiackal, Florin Dzeladini
+# Modifications: 	-
+# *************************************************************
+
+
+# *********** PARAMETERS *************
+defines
+{
+    N ?= 8 # ?= : if not yet defined
+}
+FREQ 	= 1
+W_UP 	= 10
+W_DOWN 	= 30
+PHI_LAG	= "2*pi/@N"
+PROP_FB	= 0
+EXT_FB = 0
+KAPPA = 0
+
+# *********** TEMPLATE FOR OSCILLATORS *************
+templates{
+
+	node Oscillator{
+
+		theta  = "rand(0.01,2*pi-0.01)"
+		theta' = "2 * pi * f - s * sin(theta) - e * cos(theta+kappa)"
+		theta_dot = "2 * pi * f - s * sin(theta) - e * cos(theta)"
+		x = "r*cos(theta)"
+	}
+
+	edge coupling{
+
+		theta' += "w * sin(input.theta - output.theta - phi)"	
+	}
+
+}
+
+# *********** OSCILLATOR CHAIN AND COUPLINGS *************
+
+node "osc{1}" : Oscillator {f = FREQ s = PROP_FB e = EXT_FB kappa = KAPPA r = 1}
+node "osc{2:@N}" : Oscillator {f = FREQ s = PROP_FB e = EXT_FB kappa = KAPPA r = 1}
+
+<bidirectional> edge from 
+"osc{1:@N}" to "osc{$(@1+1)}" : coupling{
+    w = [W_UP, W_DOWN]
+	phi = [PHI_LAG, "-PHI_LAG"]
+}
+
+
+# *********** LAYOUT (TO PRINT) *************
+layout{
+	"osc{1:@N}"   at 4,@[+++]
+}
