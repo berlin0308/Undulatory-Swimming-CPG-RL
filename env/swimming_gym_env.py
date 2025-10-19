@@ -130,7 +130,7 @@ class SwimmingGymEnv(gym.Env):
     water_body = self._pybullet_client.createMultiBody(
         baseMass=0,
         baseCollisionShapeIndex=water_plane,
-        basePosition=[0, 0, 0],  # Water surface at z=0
+        basePosition=[0, 0, -0.5],  # Water surface at z=-0.5 (deeper water)
         baseOrientation=[0, 0, 0, 1])
     
     # Set water properties
@@ -141,8 +141,8 @@ class SwimmingGymEnv(gym.Env):
 
   def _load_robot(self):
     """Load the swimming robot."""
-    # Force load 6-joint version
-    urdf_path = os.path.join(currentdir, "assem_description/urdf/assem_description_6joints.urdf")
+    # Force load 6-joint version - fix path to go up one directory
+    urdf_path = os.path.join(os.path.dirname(currentdir), "assem_description/urdf/assem_description_6joints.urdf")
     print(f"Loading 6-joint swimming robot URDF from: {urdf_path}")
     
     if self._on_rack:
@@ -153,10 +153,10 @@ class SwimmingGymEnv(gym.Env):
           [0, 0, 0, 1],  # orientation
           useFixedBase=True)
     else:
-      # Place robot floating on water
+      # Place robot submerged in water
       self.robot = self._pybullet_client.loadURDF(
           urdf_path,
-          [0, 0, 0.1],  # position floating on water
+          [0, 0, -0.2],  # position submerged in water (swimming depth)
           [0, 0, 0, 1],  # orientation
           useFixedBase=False)
     

@@ -21,14 +21,14 @@ class PhaseOscillatorNetwork:
     """
     def __init__(self, 
                  num_joints=10,
-                 freq=1.0,
+                 freq=5.0,
                  w_up=10.0,
                  w_down=30.0,
                  prop_fb=0.0,
                  ext_fb=0.0,
                  kappa=0.0,
                  nb_fb=0.0,
-                 tau=0.01,
+                 tau=0.05,
                  time_step=0.005):
         
         self.num_joints = num_joints
