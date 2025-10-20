@@ -1,0 +1,160 @@
+DEF ROBOT_LIBRARY Group {
+  children [
+    Shape {
+      appearance DEF SALAMANDER_COLOR Appearance {
+        material Material {
+          ambientIntensity 0
+          diffuseColor 1 1 1
+          emissiveColor 1 0.647059 0
+          shininess 0
+        }
+      }
+    }
+    Shape {
+      appearance DEF ELEMENT_COVER Appearance {
+        material Material {
+          ambientIntensity 0
+          diffuseColor 0 0 0
+          emissiveColor 0.0313726 0.0117647 0.0117647
+        }
+      }
+    }
+  ]
+}
+DEF ROBOT Supervisor {
+  translation 0 __Y_STARTING_POSITION__ 0
+  children [
+    Emitter {
+    }
+    Receiver {
+      channel 1
+    }
+    DEF PHYSICS_ROBOT Solid {
+      translation 0 __HEAD_SEGMENT_Y_COM__ __HEAD_SEGMENT_Z_COM__
+      boundingObject Group {
+        children [
+          Transform {
+            translation 0 __HEAD_SUB_SEGMENT_Y_COM__ __HEAD_SUB_SEGMENT_CYL_Z_COM__
+            children [
+              Cylinder {
+                height __SEGMENT_HEIGHT__
+                radius __SEGMENT_RADIUS__
+              }
+            ]
+          }
+          Transform {
+            translation 0 __HEAD_SUB_SEGMENT_Y_COM__ __HEAD_SUB_SEGMENT_BOX_Z_COM__
+            children [
+              Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT__ __SEGMENT_LENGTH__
+              }
+            ]
+          }
+        ]
+      }
+      physics Physics {
+        density -1
+        mass __SEGMENT_MASS__
+      }
+    }
+    DEF APPEARANCE Group {
+      children [
+        Transform {
+          translation 0 0 0
+          children [
+            Shape {
+              appearance DEF SALAMANDER_COLOR Appearance {
+                material Material {
+                  ambientIntensity 0
+                  diffuseColor 0.678431 0.847059 0.901961
+                  emissiveColor 0.27451 0.27451 0.972549
+                  shininess 0
+                }
+              }
+              geometry Cylinder {
+                height __SEGMENT_HEIGHT_BOX_M__
+                radius __SEGMENT_RADIUS__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 0 __SEGMENT_TRANSLATION_Z_BOX__
+          children [
+            Shape {
+              appearance USE SALAMANDER_COLOR
+              geometry Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT_BOX_M__ __SEGMENT_LENGTH__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 __SEGMENT_TRANSLATION_Y_UD__ 0
+          children [
+            Shape {
+              appearance DEF ELEMENT_COVER Appearance {
+                material Material {
+                  ambientIntensity 0
+                  diffuseColor 0 0 0
+                  emissiveColor 0.164706 0.184314 0.392157
+                }
+              }
+              geometry Cylinder {
+                height __SEGMENT_HEIGHT_BOX_UD__
+                radius __SEGMENT_RADIUS__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 -__SEGMENT_TRANSLATION_Y_UD__ 0
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Cylinder {
+                height __SEGMENT_HEIGHT_BOX_UD__
+                radius __SEGMENT_RADIUS__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 __SEGMENT_TRANSLATION_Y_UD__ __SEGMENT_TRANSLATION_Z_BOX__
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT_BOX_UD__ __SEGMENT_LENGTH__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 -__SEGMENT_TRANSLATION_Y_UD__ __SEGMENT_TRANSLATION_Z_BOX__
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT_BOX_UD__ __SEGMENT_LENGTH__
+              }
+            }
+          ]
+        }
+      ]
+    }
+    __JOINTS__
+
+    GPS {
+      name "gps1"
+    }
+  ]
+  boundingObject Sphere {
+    radius 0.006
+  }
+  physics Physics {
+    density -1
+    mass 0.01
+  }
+  controller "__JOINT_CONTROLLER__"
+}

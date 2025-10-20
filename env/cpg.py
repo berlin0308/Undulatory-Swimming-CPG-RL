@@ -22,7 +22,9 @@ class PhaseOscillatorNetwork:
                  kappa=0.0,
                  nb_fb=0.0,
                  tau=0.01,
-                 time_step=0.005):
+                 alpha=1.0,
+                 time_step=0.005
+                 ):
         
         self.num_joints = num_joints
         self.freq = freq
@@ -34,6 +36,7 @@ class PhaseOscillatorNetwork:
         self.nb_fb = nb_fb
         self.tau = tau
         self.dt = time_step
+        self.alpha = alpha
         
         # Phase lag calculation exactly as in agnathax
         self.phi_lag = 2 * np.pi / self.num_joints
@@ -49,7 +52,7 @@ class PhaseOscillatorNetwork:
                 self.theta[i] = np.pi  # Odd joints start at π (180°)
         
         self.theta_dot = np.zeros(self.num_joints)
-        self.x = np.cos(self.theta)  # Calculate initial output
+        self.x = self.alpha * np.cos(self.theta)  # Calculate initial output
         
     def update(self):
         """Update phase oscillator network exactly as in agnathax."""
@@ -90,8 +93,8 @@ class PhaseOscillatorNetwork:
         # Keep theta in [0, 2π]
         self.theta = self.theta % (2 * np.pi)
         
-        # Calculate output x = r*cos(theta) where r=1
-        self.x = np.cos(self.theta)
+        # Calculate output x = alpha * cos(theta)
+        self.x = self.alpha * np.cos(self.theta)
         
         return self.x.copy()
     

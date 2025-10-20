@@ -1,0 +1,135 @@
+DEF __JOINT_NAME_CAPITAL__ Servo {
+  translation 0 0 __SEGMENT_TRANSLATION_Z__
+  children [
+    DEF PHYSICS___JOINT_NAME_CAPITAL__ Solid {
+      translation 0 __SEGMENT_Y_COM__ __SEGMENT_Z_COM__
+      boundingObject Group {
+        children [
+          Transform {
+            translation 0 __SUB_SEGMENT_Y_COM__ __SUB_SEGMENT_CYL_Z_COM__
+            children [
+              Cylinder {
+                height __SEGMENT_HEIGHT__
+                radius __SEGMENT_RADIUS__
+              }
+            ]
+          }
+          Transform {
+            translation 0 __SUB_SEGMENT_Y_COM__ __SUB_SEGMENT_BOX_Z_COM__
+            children [
+              Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT__ __SEGMENT_LENGTH__
+              }
+            ]
+          }
+          Transform {
+            translation __SEGMENT_WIDTH_M__ -__SEGMENT_HEIGHT_BOX_M__ 0
+            children [
+              Sphere {
+                radius 0.005
+              }
+            ]
+          }
+          Transform {
+            translation -__SEGMENT_WIDTH_M__ -__SEGMENT_HEIGHT_BOX_M__ 0
+            children [
+              Sphere {
+                radius 0.005
+              }
+            ]
+          }
+        ]
+      }
+      physics Physics {
+        density -1
+        mass __SEGMENT_MASS__
+      }
+    }
+    DEF APPEARANCE Group {
+      children [
+        Transform {
+          translation 0 0 0
+          children [
+            Shape {
+              appearance USE SALAMANDER_COLOR
+              geometry Cylinder {
+                height __SEGMENT_HEIGHT_BOX_M__
+                radius __SEGMENT_RADIUS__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 0 __SEGMENT_TRANSLATION_Z_BOX__
+          children [
+            Shape {
+              appearance USE SALAMANDER_COLOR
+              geometry Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT_BOX_M__ __SEGMENT_LENGTH__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 __SEGMENT_TRANSLATION_Y_UD__ 0
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Cylinder {
+                height __SEGMENT_HEIGHT_BOX_UD__
+                radius __SEGMENT_RADIUS__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 -__SEGMENT_TRANSLATION_Y_UD__ 0
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Cylinder {
+                height __SEGMENT_HEIGHT_BOX_UD__
+                radius __SEGMENT_RADIUS__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 __SEGMENT_TRANSLATION_Y_UD__ __SEGMENT_TRANSLATION_Z_BOX__
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT_BOX_UD__ __SEGMENT_LENGTH__
+              }
+            }
+          ]
+        }
+        Transform {
+          translation 0 -__SEGMENT_TRANSLATION_Y_UD__ __SEGMENT_TRANSLATION_Z_BOX__
+          children [
+            Shape {
+              appearance USE ELEMENT_COVER
+              geometry Box {
+                size __SEGMENT_WIDTH__ __SEGMENT_HEIGHT_BOX_UD__ __SEGMENT_LENGTH__
+              }
+            }
+          ]
+        }
+      ]
+    }
+    __NEXT_ELEMENT__
+  ]
+  name "__JOINT_NAME__"
+  boundingObject Sphere {
+    radius 0.006
+  }
+  physics Physics {
+    density -1
+    mass 0.0001
+  }
+  minPosition -1.3
+  maxPosition 1.3
+  minStop -1.31
+  maxStop 1.31
+}

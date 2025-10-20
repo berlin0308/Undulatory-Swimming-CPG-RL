@@ -118,13 +118,8 @@ class GenesisSwimmingSimulation:
         urdf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assem_description/urdf/assem_description_6joints.urdf')
         print(f"Loading 6-joint swimming robot URDF from: {urdf_path}")
         
-        # Position robot - debug mode puts robot at bottom, normal mode slightly underwater
-        if debug_mode:
-            robot_z = 0.1  # Robot at bottom of water (near ground level)
-            print(f"Debug mode: Robot positioned at water bottom")
-        else:
-            robot_z = 0.29  # Robot center slightly underwater (0.3 - 0.05)
-            print(f"Normal mode: Robot positioned slightly underwater")
+        robot_z = 0.1  # Robot at bottom of water (near ground level)
+        print(f"Debug mode: Robot positioned at water bottom")
         
         # Load robot using the working method from run_cpg_gs_old.py
         try:
@@ -137,27 +132,6 @@ class GenesisSwimmingSimulation:
             print("Loaded robot using standard URDF method")
         except Exception as e:
             print(f"Standard URDF loading failed: {e}")
-            try:
-                # Method 2: Try with joint control enabled
-                self.robot = self.scene.add_entity(
-                    material=gs.materials.Rigid(),
-                    morph=gs.morphs.URDF(file=urdf_path, fixed=False, pos=(0.0, 0.0, robot_z), enable_joint_control=True),
-                    surface=gs.surfaces.Default(color=(0.79216, 0.81961, 0.93333)),
-                )
-                print("Loaded robot with joint control enabled")
-            except Exception as e2:
-                print(f"URDF with joint control failed: {e2}")
-                try:
-                    # Method 3: Try with different material
-                    self.robot = self.scene.add_entity(
-                        material=gs.materials.Rigid(enable_joint_control=True),
-                        morph=gs.morphs.URDF(file=urdf_path, fixed=False, pos=(0.0, 0.0, robot_z)),
-                        surface=gs.surfaces.Default(color=(0.79216, 0.81961, 0.93333)),
-                    )
-                    print("Loaded robot with joint control in material")
-                except Exception as e3:
-                    print(f"All robot loading methods failed: {e3}")
-                    raise
         
         # Try to enable joint control after loading (like run_cpg_gs_old.py)
         try:
@@ -568,18 +542,8 @@ class GenesisSwimmingSimulation:
                     self.cam.stop_recording()
                     print("Video recording stopped successfully!")
                 except Exception as e:
-                    print(f"Error stopping recording: {e}")
-                    # Try alternative method
-                    try:
-                        self.cam.stop_recording(
-                            save_to_filename=f"videos/{self.model_name}_simulation_interrupted.mp4"
-                        )
-                        print(f"Video saved to videos/{self.model_name}_simulation_interrupted.mp4")
-                    except Exception as e2:
-                        print(f"Alternative save method also failed: {e2}")
-            
-            raise  # Re-raise to be caught by outer try-catch
-        
+                    print(f"Error stopping video recording: {e}")
+                    
         # Stop video recording (exactly like run_cpg_gs_old.py)
         if self.record_video and self.cam is not None:
             try:
@@ -593,9 +557,9 @@ class GenesisSwimmingSimulation:
                 try:
                     # Try with filename parameter
                     self.cam.stop_recording(
-                        save_to_filename=f"videos/{self.model_name}_simulation.mp4"
+                        save_to_filename=f"outputs/{self.model_name}_simulation.mp4"
                     )
-                    print(f"Video saved to videos/{self.model_name}_simulation.mp4")
+                    print(f"Video saved to outputs/{self.model_name}_simulation.mp4")
                 except Exception as e2:
                     print(f"Alternative save method also failed: {e2}")
         
@@ -662,7 +626,7 @@ class GenesisSwimmingSimulation:
             
             # Save plot
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            plot_filename = f"genesis_swimming_results_{self.model_name}_{timestamp}.png"
+            plot_filename = f"outputs/plot_{self.model_name}_{timestamp}.png"
             plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
             print(f"✓ Plot saved as: {plot_filename}")
             
