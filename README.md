@@ -1,224 +1,109 @@
-# CPG-RL Swimming Robot
+# CPG + RL Swimming Robot
 
-Hybrid CPG-RL control for robotic fish swimming in fluid environments with realistic disturbances.
+Hybrid control for a swimming robot: **CPG (Central Pattern Generator)** and **RL (PPO)**. The simulator is built on **Genesis SPH** and is configured to run on **CUDA** and **macOS (Metal)** as well as other platforms.
 
 ## Features
 
-- **Hybrid Control**: Central Pattern Generator (CPG) with Reinforcement Learning modulation
-- **Kuramoto Coupling**: Phase-coupled oscillators with learnable forward/backward weights
-- **Fluid Disturbance**: Realistic SPH-based water currents (constant, turbulent, vortex, oscillating, mixed)
-- **Genesis Physics**: High-fidelity SPH fluid simulation with CUDA acceleration
+- **Hybrid Control**: CPG + PPO modulation
+- **Paddle Disturbance (enabled)**: deterministic, controllable wave generator
+- **Genesis SPH Simulation**: high-fidelity water simulation (backend auto-selected)
+
+
+## Report & Slides
+
+- [Final report (PDF)](https://drive.google.com/file/d/1-rkVcRfrzAJNvsdxhwD7sjyyPeUdQj_k/view?usp=drive_link)
+- [Slides](https://docs.google.com/presentation/d/1Vud8cceVkI4Xqtnn5zXhVna2Ju6DfnQXgmQNLcgvPE8/edit?usp=drive_link)
 
 ## Installation
 
 ### Prerequisites
 
-- Python 3.8+
-- CUDA-capable GPU
-- Genesis physics simulator
+- Python **3.11** recommended (Conda works well on macOS)
+- Genesis: `genesis-world`
 
-### Install Genesis
+### Install dependencies
 
 ```bash
-pip install genesis-world
+pip install -r requirements.txt
 ```
 
-### Install Dependencies
+If you use Conda on macOS and want to be explicit:
 
 ```bash
-pip install torch numpy matplotlib
+/opt/anaconda3/bin/python3 -m pip install -r requirements.txt
 ```
 
 ## Quick Start
 
 ### Training
 
-Train with default CPG-RL mode (no disturbance):
+No paddle disturbance:
 
 ```bash
-python3 run.py --mode cpg_rl --cpg 0 --profile short
+/opt/anaconda3/bin/python3 run.py --mode cpg_rl --cpg 0 --profile short
 ```
 
-Train with fluid disturbance (mixed mode):
+Enable paddle disturbance:
 
 ```bash
-python3 run.py --mode cpg_rl --cpg 0 --profile short \
-    --fluid_disturbance mixed --disturbance_intensity 1.0
+/opt/anaconda3/bin/python3 run.py --mode cpg_rl --cpg 0 --profile short \
+  --paddle --paddle-count 2 --paddle-freq 0.2 --paddle-amp 0.17
 ```
 
-Training profiles:
-- `short`: 100 updates, quick testing (default)
-- `standard`: 500 updates, full training
-- `long`: 1000 updates, extended training
+### Key flags
 
-### Evaluation
+- **`--mode`**: `direct` | `cpg` | `cpg_rl` | `res_rl`
+- **`--cpg`**: `0` = PhaseOscillator (recommended), `1` = Matsuoka
+- **`--paddle`**: enable paddle disturbance
+- **`--paddle-count`**: number of paddles
+- **`--paddle-freq`**: oscillation frequency (Hz)
+- **`--paddle-amp`**: oscillation amplitude (m)
 
-Evaluate a trained model without disturbance:
+## Control interface (CPG-RL)
+
+In `--mode cpg_rl`, PPO outputs CPG modulation parameters:
+
+- **Action (5D)**: `[freq_mod, amp_mod, phase_shift, w_forward, w_backward]`
+
+## Platform notes
+
+### Genesis backend selection
+
+The simulator auto-selects a safe backend (e.g., **Metal on macOS**). You can override it:
 
 ```bash
-python3 eval.py --checkpoint cpg_runs/cpg_rl_cpg0_short/model_update_100.pt \
-    --episodes 10 --render
+GENESIS_BACKEND=metal /opt/anaconda3/bin/python3 run.py --mode cpg_rl --profile short
 ```
 
-Evaluate with fluid disturbance:
+Supported values: `cpu`, `metal`, `cuda` (if available).
 
-```bash
-python3 eval.py --checkpoint cpg_runs/cpg_rl_cpg0_short/model_update_100.pt \
-    --episodes 10 --disturbance mixed --intensity 1.5
-```
-
-## Control Modes
-
-### CPG-RL Mode (`--mode cpg_rl`)
-
-RL modulates CPG parameters in real-time:
-
-- **Action Space (5D)**: `[freq_mod, amp_mod, phase_shift, w_forward, w_backward]`
-- **freq_mod**: Frequency modulation
-- **amp_mod**: Amplitude modulation
-- **phase_shift**: Phase offset
-- **w_forward**: Forward coupling weight (head → tail)
-- **w_backward**: Backward coupling weight (tail → head)
-
-### CPG Selection
-
-Choose CPG architecture with `--cpg` flag:
-
-- `0`: Kuramoto (phase-coupled oscillators, **recommended**)
-- `1`: Van der Pol (relaxation oscillator)
-- `2`: Matsuoka (neural oscillator)
-
-## Fluid Disturbance Modes
-
-Enable realistic water currents during training/evaluation:
-
-- `none`: No disturbance (still water)
-- `constant`: Steady current in one direction
-- `turbulent`: Random fluctuations (Gaussian noise)
-- `vortex`: Rotational flow patterns
-- `oscillating`: Sinusoidal waves
-- `mixed`: Combination of all (most realistic, **recommended**)
-
-Adjust intensity with `--disturbance_intensity` (default: 1.0):
-- `0.5`: Gentle flow
-- `1.0`: Moderate flow
-- `2.0`: Strong currents
-
-## File Structure
+## Project structure
 
 ```
-cpg_swimming_release/
-├── run.py                   # Training script
-├── eval.py                  # Evaluation script
-├── cpg_ppo_agent.py         # PPO implementation
-├── cpg_env_adapter.py       # Environment wrapper
-├── fluid_disturbance.py     # SPH disturbance system
-├── cpg_config_utils.py      # Configuration profiles
+.
+├── run.py
+├── eval.py
+├── cpg_ppo_agent.py
+├── cpg_env_adapter.py
+├── cpg_config_utils.py
 ├── env/
-│   ├── cpg.py              # CPG models (Kuramoto, Van der Pol, Matsuoka)
-│   └── swim_gs_env.py      # Genesis SPH swimming environment
-└── README.md               # This file
-```
-
-## Training Configuration
-
-Modify `cpg_config_utils.py` to customize training parameters:
-
-```python
-RUN_PROFILES = {
-    "my_experiment": {
-        "lr": 3e-3,               # Learning rate
-        "batch_steps": 500,       # Steps per update
-        "hidden": 128,            # Hidden layer size
-        "max_episode_steps": 500, # Episode length
-        "updates": 500,           # Total updates
-        "couple_w_forward": 1.0,  # Initial forward coupling
-        "couple_w_backward": 1.0, # Initial backward coupling
-    }
-}
-```
-
-Run with custom profile:
-
-```bash
-python3 run.py --mode cpg_rl --profile my_experiment
-```
-
-## Examples
-
-### Train robust policy with disturbance
-
-```bash
-python3 run.py --mode cpg_rl --cpg 0 --profile standard \
-    --fluid_disturbance mixed --disturbance_intensity 1.0 \
-    --out cpg_runs/robust_swimmer
-```
-
-### Evaluate on harder disturbance
-
-```bash
-python3 eval.py --checkpoint cpg_runs/robust_swimmer/model_update_500.pt \
-    --episodes 20 --disturbance mixed --intensity 2.0 --render
-```
-
-### Train without disturbance, test with disturbance
-
-```bash
-# Train in still water
-python3 run.py --mode cpg_rl --cpg 0 --profile standard
-
-# Test in flowing water
-python3 eval.py --checkpoint cpg_runs/cpg_rl_cpg0_standard/model_update_500.pt \
-    --disturbance turbulent --intensity 1.0
+│   ├── cpg.py
+│   └── swim_gs_env.py
+└── eelrobotv2_urdf/
+    ├── urdf/
+    └── meshes/
 ```
 
 ## Troubleshooting
 
-### CUDA Out of Memory
+### First run is slow
 
-Reduce SPH particle count in `env/swim_gs_env.py`:
+Genesis may compile kernels on the first run (especially on macOS/Metal). Let it finish; subsequent runs are faster.
 
-```python
-sph_options=gs.options.SPHOptions(
-    particle_size=0.04  # Increase from 0.03 (fewer particles)
-)
-```
+### `wandb` not installed
 
-### Slow Training
-
-Use `short` profile or reduce batch steps:
+This repo treats `wandb` as optional. If you want W&B logging:
 
 ```bash
-python3 run.py --mode cpg_rl --profile short  # 100 updates
+pip install wandb
 ```
-
-### Robot Unstable
-
-Reduce disturbance intensity or modify flow coefficients in `fluid_disturbance.py`:
-
-```python
-# Line 136: Reduce constant current
-delta_v += self.intensity * 0.15 * self.current_direction  # From 0.3 to 0.15
-```
-
-## Citation
-
-If you use this code, please cite:
-
-```bibtex
-@software{cpg_rl_swimming,
-  title = {CPG-RL Swimming Robot with Fluid Disturbance},
-  author = {Your Name},
-  year = {2025},
-  url = {https://github.com/yourusername/cpg-swimming}
-}
-```
-
-## License
-
-MIT License - see LICENSE file for details.
-
-## Acknowledgments
-
-- Genesis physics simulator: https://genesis-world.readthedocs.io/
-- PPO implementation based on Spinning Up (OpenAI)
