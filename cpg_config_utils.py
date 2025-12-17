@@ -39,10 +39,11 @@ RUN_PROFILES = {
         "res_rl_init_gain": 0.2,    # Small gain for near-zero residuals initially
         "res_rl_residual_scale": 1,  # Maximum residual scaling (used with tanh)
         "res_rl_residual_penalty": 0.01,  # L2 penalty on residual magnitude
-        # Fluid disturbance parameters (for robustness training/evaluation)
-        "fluid_disturbance": "turbulent",         # Disturbance mode: None, "constant", "turbulent", "vortex", "oscillating", "mixed"
-        "disturbance_intensity": 25.0, # 50.0,      # Disturbance intensity multiplier (50.0 = strong, 25.0 = standard)
-        "disturbance_randomize": True,     # Randomize disturbance parameters for domain randomization
+        # Disturbance parameters
+        # NOTE: Non-paddle disturbance modes are disabled for now.
+        "fluid_disturbance": None,
+        "disturbance_intensity": 0.0,
+        "disturbance_randomize": False,
         # Boundary termination parameters
         "terminate_on_x_boundary": True, #nate episode when x goes outside boundaries
         "x_left_boundary": 0.7,    # Left boundary (x < x_left triggers termination)
@@ -79,10 +80,11 @@ RUN_PROFILES = {
         "res_rl_init_gain": 0.01,    # Small gain for near-zero residuals initially
         "res_rl_residual_scale": 0.7,  # Maximum residual scaling (used with tanh)
         "res_rl_residual_penalty": 0.001,  # L2 penalty on residual magnitude
-        # Fluid disturbance parameters (for robustness training/evaluation)
-        "fluid_disturbance": None,         # Disturbance mode: None, "constant", "turbulent", "vortex", "oscillating", "mixed"
-        "disturbance_intensity": 1.0,      # Disturbance intensity multiplier (0.0 = off, 1.0 = standard)
-        "disturbance_randomize": True,     # Randomize disturbance parameters for domain randomization
+        # Disturbance parameters
+        # NOTE: Non-paddle disturbance modes are disabled for now.
+        "fluid_disturbance": None,
+        "disturbance_intensity": 0.0,
+        "disturbance_randomize": False,
         # Boundary termination parameters
         "terminate_on_x_boundary": True,   # Terminate episode when x goes outside boundaries
         "x_left_boundary": 0.3,           # Left boundary (x < x_left triggers termination)

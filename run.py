@@ -8,7 +8,22 @@ from cpg_config_utils import RUN_PROFILES, RunSaver
 from cpg_env_adapter import SwimmingCPGEnv
 from cpg_ppo_agent import RunnerPPO
 from tqdm import tqdm
-import wandb
+try:
+    import wandb  # Optional
+    _WANDB_AVAILABLE = True
+except ModuleNotFoundError:
+    wandb = None
+    _WANDB_AVAILABLE = False
+
+
+class _NoOpWandbRun:
+    """Fallback run object when wandb is not installed."""
+
+    def log(self, *args, **kwargs):
+        return None
+
+    def finish(self, *args, **kwargs):
+        return None
 
 def compute_gae(rewards, values, dones, gamma, lam):
     adv = np.zeros_like(rewards, dtype=np.float32)
@@ -36,13 +51,8 @@ def main():
     parser.add_argument("--obs-joint-vel", action="store_true", help="Add joint velocities (6) to observations")
     parser.add_argument("--obs-linear-vel", action="store_true", help="Add linear velocity (3) to observations")
     parser.add_argument("--obs-phase-diff", action="store_true", help="Add phase differences (5) to observations")
-    parser.add_argument("--disturbance", type=str, default=None,
-                        choices=[None, "constant", "turbulent", "vortex", "oscillating", "mixed"],
-                        help="Fluid disturbance mode (overrides config)")
-    parser.add_argument("--disturbance-intensity", type=float, default=None,
-                        help="Disturbance intensity multiplier (overrides config)")
     
-    # NEW: Paddle disturbance arguments
+    # Paddle disturbance arguments
     parser.add_argument("--paddle", action="store_true",
                         help="Enable paddle disturbance")
     parser.add_argument("--paddle-count", type=int, default=2,
@@ -64,12 +74,6 @@ def main():
 
     cfg = RUN_PROFILES[args.profile].copy()
 
-    # Override disturbance config with command-line arguments if provided
-    if args.disturbance is not None:
-        cfg["fluid_disturbance"] = args.disturbance
-    if args.disturbance_intensity is not None:
-        cfg["disturbance_intensity"] = args.disturbance_intensity
-
     saver = RunSaver(root=args.out)
     saver.save_cfg(cfg)
 
@@ -77,7 +81,7 @@ def main():
 
     # Add configuration suffix to run name
     suffix_parts = []
-    suffix_parts.append(args.mode)  # cpg_rl, direct, or cpg
+    suffix_parts.append(args.mode)
     if args.mode == "cpg_rl":
         if args.learn_phase_offset:
             suffix_parts.append("learnable_offset")
@@ -88,14 +92,13 @@ def main():
     if args.obs_phase_diff:
         suffix_parts.append("pdiff")
     if args.paddle:
-        suffix_parts.append(f"paddle{args.paddle_count}")  # NEW: Add paddle info to run name
+        suffix_parts.append(f"paddle{args.paddle_count}")
     if args.note:
         suffix_parts.append(args.note)
 
     if suffix_parts:
         run_name = f"{run_name}_{'_'.join(suffix_parts)}"
 
-    # NEW: Configure paddle disturbance
     paddle_config = None
     if args.paddle:
         paddle_config = {
@@ -118,15 +121,19 @@ def main():
         print(f"  Swim zone (X-axis excluded): x ∈ [{paddle_config['swim_zone'][0]:.2f}, {paddle_config['swim_zone'][1]:.2f}]")
         print(f"{'='*70}\n")
 
-    run = wandb.init(
-        # Set the wandb entity where your project will be logged (generally your team name).
-        entity="junzhehu-carnegie-mellon-university",
-        # Set the wandb project where this run will be logged.
-        project="hydro-self",
-        # Track hyperparameters and run metadata.
-        config={**cfg, "paddle_enabled": args.paddle, "paddle_config": paddle_config if paddle_config else None},
-        name=run_name
-    )
+    if _WANDB_AVAILABLE:
+        run = wandb.init(
+            # Set the wandb entity where your project will be logged (generally your team name).
+            entity="junzhehu-carnegie-mellon-university",
+            # Set the wandb project where this run will be logged.
+            project="hydro-self",
+            # Track hyperparameters and run metadata.
+            config={**cfg, "paddle_enabled": args.paddle, "paddle_config": paddle_config if paddle_config else None},
+            name=run_name,
+        )
+    else:
+        print("wandb is not installed; disabling wandb logging.")
+        run = _NoOpWandbRun()
 
     env = SwimmingCPGEnv(
         control_mode=args.mode,
@@ -140,8 +147,8 @@ def main():
         obs_phase_diff=args.obs_phase_diff,
         debug=True,
         record=False,
-        fluid_disturbance=cfg.get("fluid_disturbance", None),
-        disturbance_intensity=cfg.get("disturbance_intensity", 1.0),
+        fluid_disturbance=None,
+        disturbance_intensity=0.0,
         cpg_freq=cfg.get("cpg_freq", 2.0),
         cpg_alpha=cfg.get("cpg_alpha", 1.5),
         cpg_dt=cfg.get("cpg_dt", None),
@@ -151,7 +158,6 @@ def main():
         x_left_boundary=cfg.get("x_left_boundary", 0.3),
         x_right_boundary=cfg.get("x_right_boundary", 1.6),
         x_boundary_penalty=cfg.get("x_boundary_penalty", 50.0),
-        # NEW: Paddle disturbance parameters
         enable_paddle_disturbance=args.paddle,
         paddle_disturbance_config=paddle_config,
     )
@@ -162,7 +168,6 @@ def main():
     print(f"🔍 Debug: obs_dim={obs_dim}, act_dim={act_dim}")
     print(f"🔍 Debug: obs_joint_vel={args.obs_joint_vel}, obs_linear_vel={args.obs_linear_vel}, obs_phase_diff={args.obs_phase_diff}")
 
-    # Override init_std and init_gain for res_rl mode (ControlNet-style zero initialization)
     if args.mode == "res_rl":
         cfg["init_std"] = cfg.get("res_rl_init_std", 0.05)
         cfg["init_gain"] = cfg.get("res_rl_init_gain", 0.01)
@@ -178,7 +183,6 @@ def main():
     print(f"🔍 Debug: First observation shape: {obs.shape}, expected obs_dim: {obs_dim}")
     total_steps = 0
 
-    # Track learnable weights over time (only for cpg_rl mode)
     if args.mode == "cpg_rl":
         weight_history = {
             "freq_mod": [],
@@ -199,7 +203,6 @@ def main():
     for update in tqdm(range(1, updates+1)):
         # collect batch
         obs_buf, act_buf, logp_buf, rew_buf, val_buf, done_buf = [], [], [], [], [], []
-        # Accumulate info for logging
         info_buf = []
         print("Entering training loop with updates =", updates, "and batch_steps =", batch_steps, flush=True)
 
@@ -229,7 +232,6 @@ def main():
         dones = np.array(done_buf, dtype=bool)
 
         # compute advantages
-        
         advs, returns = compute_gae(rewards, values, dones, gamma, lam)
 
         stats = ppo.update(obs_arr, acts_arr, old_logp, returns, advs)

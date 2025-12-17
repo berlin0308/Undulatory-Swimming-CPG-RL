@@ -8,25 +8,53 @@ import argparse
 import numpy as np
 import genesis as gs
 import hashlib
+import platform
+
+
+def _get_genesis_backend():
+    """
+    Select a Genesis backend with a safe default for the current platform.
+    You can override with the environment variable GENESIS_BACKEND in {cpu, metal, cuda}.
+    """
+    override = os.environ.get("GENESIS_BACKEND", "").strip().lower()
+    if override:
+        if override == "cuda" and hasattr(gs, "cuda"):
+            return gs.cuda
+        if override == "metal" and hasattr(gs, "metal"):
+            return gs.metal
+        if override == "cpu" and hasattr(gs, "cpu"):
+            return gs.cpu
+
+    sys_platform = platform.system().lower()
+    if sys_platform == "darwin":
+        # CUDA is not supported on macOS. Prefer Metal when available, otherwise fall back to CPU.
+        if hasattr(gs, "metal"):
+            return gs.metal
+        return gs.cpu
+
+    # Default for Linux/Windows: try CUDA if present, else CPU.
+    if hasattr(gs, "cuda"):
+        return gs.cuda
+    return gs.cpu
 
 
 class OscillatingPaddleDisturbance:
-    """振荡桨叶扰动器 - Z轴上下运动产生波浪"""
+    """Oscillating paddle disturbance (vertical motion along Z creates waves)."""
 
     def __init__(self, scene, n_paddles=10, water_bounds=None, swim_zone=None,
                  oscillation_freq=3.5, oscillation_amplitude=0.10,
                  paddle_size=(0.55, 0.25, 0.1), paddle_mass=3000.0, seed=42):
         """
         Args:
-            scene: Genesis场景对象（必须在scene.build()之前传入）
-            n_paddles: 桨叶数量
-            water_bounds: 水域边界 (min_x, max_x, min_y, max_y, min_z, max_z)
-            swim_zone: X轴游泳区域 (min_x, max_x) - paddle不会放置在这里
-            oscillation_freq: 振荡频率 (Hz)
-            oscillation_amplitude: 振荡幅度 (m)
-            paddle_size: 桨叶尺寸
-            paddle_mass: 桨叶密度
-            seed: 随机种子
+            scene: Genesis scene object (must be provided before scene.build())
+            n_paddles: Number of paddles
+            water_bounds: Water bounds (min_x, max_x, min_y, max_y, min_z, max_z)
+            swim_zone: X-axis swim zone (min_x, max_x) where paddles will not be placed
+            oscillation_freq: Oscillation frequency (Hz)
+            oscillation_amplitude: Oscillation amplitude (m)
+            paddle_size: Paddle size (meters)
+            paddle_mass: Paddle density (kg/m^3)
+            seed: RNG seed
         """
         if seed is not None:
             np.random.seed(seed)
@@ -42,26 +70,26 @@ class OscillatingPaddleDisturbance:
         self.paddles = []
         self.enabled = True
 
-        # 定义左右两侧的X轴区域（避开游泳区域）
+        # Define left/right X ranges, excluding the swim zone.
         swim_min_x, swim_max_x = self.swim_zone
         left_x_range = (self.water_bounds[0] + 0.2, swim_min_x - 0.15)
         right_x_range = (swim_max_x + 0.15, self.water_bounds[1] - 0.2)
 
-        # 将Y轴分成若干段
+        # Split the Y-axis into segments to spread paddles.
         y_total = self.water_bounds[3] - self.water_bounds[2]
         n_y_segments = max(2, (n_paddles + 1) // 2)
         y_segment_size = y_total / n_y_segments
 
-        # 为每个paddle生成参数
+        # Generate per-paddle parameters.
         self.paddle_params = []
         for i in range(n_paddles):
-            # 交替左右放置
+            # Alternate placement between left and right side.
             if i % 2 == 0:
                 x_range = left_x_range
             else:
                 x_range = right_x_range
 
-            # 分配到不同的Y段
+            # Assign to different Y segments.
             y_segment_idx = i // 2
             if y_segment_idx < n_y_segments:
                 y_start = self.water_bounds[2] + y_segment_idx * y_segment_size + 0.15
@@ -90,7 +118,7 @@ class OscillatingPaddleDisturbance:
         print(f"  Swim zone (X-axis excluded): x ∈ [{swim_min_x:.2f}, {swim_max_x:.2f}]")
 
     def add_paddles_to_scene(self):
-        """在scene.build()之前调用此方法添加paddle实体"""
+        """Add paddle entities to the scene (must be called before scene.build())."""
         for i, params in enumerate(self.paddle_params):
             paddle = self.scene.add_entity(
                 material=gs.materials.Rigid(rho=self.paddle_mass),
@@ -106,19 +134,19 @@ class OscillatingPaddleDisturbance:
         print(f"[OscillatingPaddleDisturbance] Added {len(self.paddles)} paddles to scene")
 
     def update(self, current_time):
-        """每个仿真步调用此方法更新paddle位置"""
+        """Update paddle positions each simulation step."""
         if not self.enabled or len(self.paddles) == 0:
             return
 
         for i, paddle in enumerate(self.paddles):
             params = self.paddle_params[i]
 
-            # 计算Z轴振荡偏移
+            # Compute vertical (Z) oscillation offset.
             offset = params['amplitude'] * np.sin(
                 2 * np.pi * params['freq'] * current_time + params['phase']
             )
 
-            # 新位置（只在Z轴移动）
+            # New position (only move along Z).
             new_pos = np.array([
                 params['center_x'],
                 params['center_y'],
@@ -128,14 +156,14 @@ class OscillatingPaddleDisturbance:
             try:
                 paddle.set_pos(new_pos)
             except AttributeError:
-                pass  # 如果set_pos不存在，忽略
+                pass  # Ignore if set_pos is unavailable.
 
     def enable(self):
-        """启用扰动"""
+        """Enable disturbance."""
         self.enabled = True
 
     def disable(self):
-        """禁用扰动"""
+        """Disable disturbance."""
         self.enabled = False
 
 
@@ -146,9 +174,9 @@ class GenesisSwimmingSimulation:
                  record=False, record_dir=None):
         """
         Args:
-            vis: 是否启用可视化
-            enable_disturbance: 是否启用paddle扰动
-            disturbance_config: paddle扰动配置字典，例如:
+            vis: Enable visualization
+            enable_disturbance: Enable paddle disturbance
+            disturbance_config: Paddle disturbance config dict, e.g.:
                 {
                     'n_paddles': 6,
                     'oscillation_freq': 1.5,
@@ -157,8 +185,8 @@ class GenesisSwimmingSimulation:
                     'paddle_mass': 2000.0,
                     'swim_zone': (0.6, 0.9),
                 }
-            record: 是否录制视频和流体速度数据
-            record_dir: 录制文件保存目录 (默认为 "./recordings")
+            record: Enable recording (video and fluid velocity)
+            record_dir: Output directory for recordings (default: "./recordings")
         """
         self.vis = vis
         self.enable_disturbance = enable_disturbance
@@ -170,18 +198,27 @@ class GenesisSwimmingSimulation:
         self.WATER_BOUNDS = (0.0, 0.0, 0.0), (2.0, 2.0, 1.0)
         self.SPH_BOUNDS = (0.0, 0.0, 0.0), (2.0, 2.0, 1.0)
 
-        # 用于追踪仿真时间
+        # Simulation time tracker.
         self.sim_time = 0.0
 
-        # 流体速度数据缓冲区
+        # Fluid velocity recording buffer.
         self.fluid_velocity_buffer = [] if record else None
 
-        # 创建录制目录
+        # Create recording directory.
         if self.record:
             os.makedirs(self.record_dir, exist_ok=True)
 
         # Initialize Genesis
-        gs.init(backend=gs.cuda, seed=0, precision="32", logging_level="info")
+        backend = _get_genesis_backend()
+        try:
+            gs.init(backend=backend, seed=0, precision="32", logging_level="info")
+        except Exception as e:
+            # Last-resort fallback: some platforms may only support CPU.
+            if backend is not gs.cpu:
+                print(f"[WARN] Genesis init failed with backend={backend}. Falling back to CPU. Error: {e}")
+                gs.init(backend=gs.cpu, seed=0, precision="32", logging_level="info")
+            else:
+                raise
 
         # Setup video recording path if enabled
         if self.record:
@@ -213,10 +250,9 @@ class GenesisSwimmingSimulation:
             surface=gs.surfaces.Default(color=(0.2,0.6,1.0,0.05))
         )
 
-        # Load eel robot
-        # Use relative path from repository root
+        # Load eel robot URDF from the ROS-style package folder in this repository.
         script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        urdf_path = os.path.join(script_dir, "urdf", "eelrobotv2_urdf.urdf")
+        urdf_path = os.path.join(script_dir, "eelrobotv2_urdf", "urdf", "eelrobotv2_urdf.urdf")
         self.robot = self.scene.add_entity(
             material=gs.materials.Rigid(needs_coup=True, coup_friction=0.1),
             morph=gs.morphs.URDF(file=urdf_path, pos=(1.0,1.0,0.5), euler=(0,0,0), fixed=False)
@@ -229,7 +265,7 @@ class GenesisSwimmingSimulation:
             print(f"🌊 Initializing Paddle Disturbance")
             print(f"{'='*70}")
             
-            # 默认配置
+            # Default configuration.
             default_config = {
                 'n_paddles': 10,
                 'oscillation_freq': 1.5,
@@ -239,7 +275,7 @@ class GenesisSwimmingSimulation:
                 'swim_zone': (0.6, 0.9),
             }
             
-            # 合并用户配置
+            # Merge user config.
             if disturbance_config:
                 default_config.update(disturbance_config)
             
@@ -249,7 +285,7 @@ class GenesisSwimmingSimulation:
                 **default_config
             )
             
-            # 添加paddle到场景（必须在build之前）
+            # Add paddles to the scene (must be before scene.build()).
             self.disturbance.add_paddles_to_scene()
             print(f"{'='*70}\n")
 
@@ -305,54 +341,54 @@ class GenesisSwimmingSimulation:
         return np.array(link.get_pos().cpu().numpy())
 
     def step_simulation(self):
-        """执行一步仿真（包括更新paddle）"""
-        # 更新paddle位置
+        """Run one simulation step (including paddle updates)."""
+        # Update paddle positions.
         if self.disturbance:
             self.disturbance.update(self.sim_time)
 
-        # 执行物理仿真
+        # Step physics.
         self.scene.step()
 
         # Render frame for video recording (if enabled)
         if self.record and self.camera:
             self.camera.render()
 
-        # 采集流体速度数据（如果启用录制）
+        # Collect fluid velocity data (if recording is enabled).
         if self.record and self.fluid_velocity_buffer is not None:
             self._collect_fluid_velocity_data()
             self._save_fluid_speed_frame()
 
-        # 更新仿真时间
+        # Advance simulation time.
         self.sim_time += self.SIM_DT
 
     def _collect_fluid_velocity_data(self):
-        """采集当前帧的SPH流体粒子速度数据"""
+        """Collect SPH particle velocity data for the current frame."""
         try:
-            # 获取SPH粒子的速度
-            # Genesis中SPH粒子数据存储在entity的state中
+            # Get SPH particle velocities.
+            # Note: Genesis stores SPH particle state on the entity.
             particle_velocities = self.water.get_state().vel.cpu().numpy()
             particle_positions = self.water.get_state().pos.cpu().numpy()
 
-            # 计算统计信息以减少数据量
+            # Compute summary statistics to reduce data size.
             frame_data = {
                 "time": float(self.sim_time),
                 "step": len(self.fluid_velocity_buffer),
                 "num_particles": len(particle_velocities),
-                # 速度统计
+                # Velocity statistics.
                 "vel_mean": particle_velocities.mean(axis=0).tolist(),
                 "vel_std": particle_velocities.std(axis=0).tolist(),
                 "vel_max": particle_velocities.max(axis=0).tolist(),
                 "vel_min": particle_velocities.min(axis=0).tolist(),
                 "speed_mean": float(np.linalg.norm(particle_velocities, axis=1).mean()),
                 "speed_max": float(np.linalg.norm(particle_velocities, axis=1).max()),
-                # 位置统计（用于空间分析）
+                # Position statistics (for spatial analysis).
                 "pos_mean": particle_positions.mean(axis=0).tolist(),
                 "pos_std": particle_positions.std(axis=0).tolist(),
             }
 
             self.fluid_velocity_buffer.append(frame_data)
         except Exception as e:
-            # 如果采集失败，记录警告但不中断仿真
+            # If collection fails, warn but do not interrupt simulation.
             if len(self.fluid_velocity_buffer) == 0:
                 print(f"[WARNING] Failed to collect fluid velocity data: {e}")
 
@@ -445,7 +481,7 @@ class GenesisSwimmingSimulation:
 
 
     def save_fluid_velocity_data(self, filename=None):
-        """保存流体速度数据到JSON文件"""
+        """Save recorded fluid velocity data to a JSON file."""
         if not self.record or self.fluid_velocity_buffer is None:
             return
 
@@ -476,7 +512,7 @@ class GenesisSwimmingSimulation:
         return output_path
 
     def reset_fluid_velocity_buffer(self):
-        """重置流体速度数据缓冲区（用于新的episode）"""
+        """Reset the fluid velocity buffer (for a new episode)."""
         if self.record:
             self.fluid_velocity_buffer = []
 
@@ -529,7 +565,7 @@ class GenesisSwimmingSimulation:
         # Main loop
         for qpos in u_traj:
             self.robot.control_dofs_position(qpos, self.dofs_idx)
-            self.step_simulation()  # 使用新的step方法
+            self.step_simulation()  # Use the unified step method.
             trajectory_xyz.append(self.get_base_xyz())
 
         trajectory_xyz = np.array(trajectory_xyz)
@@ -539,11 +575,11 @@ class GenesisSwimmingSimulation:
         np.save(save_path, trajectory_xyz)
         print(f"[INFO] Trajectory saved at: {save_path}")
 
-        # Print stats (保持原有的信息输出)
+        # Print stats (keep existing output format).
         self._print_stats()
 
     def _print_stats(self):
-        """打印仿真统计信息"""
+        """Print simulation statistics."""
         try:
             print("Genesis version:", gs.__version__)
         except:

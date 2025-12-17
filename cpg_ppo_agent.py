@@ -41,7 +41,12 @@ class ACNetwork(nn.Module):
         # Policy head
         # ---------------------------
         self.mu = nn.Linear(hidden_dim, act_dim)
-        nn.init.orthogonal_(self.mu.weight, gain=init_gain)
+        # Some backends (e.g., MPS) do not implement torch.linalg.qr, which is used by orthogonal_.
+        # Initialize on CPU and copy back to avoid device-specific limitations.
+        with torch.no_grad():
+            w_cpu = self.mu.weight.detach().cpu()
+            nn.init.orthogonal_(w_cpu, gain=init_gain)
+            self.mu.weight.copy_(w_cpu.to(self.mu.weight.device))
 
         if action_bias_init is not None:
             with torch.no_grad():
@@ -56,7 +61,10 @@ class ACNetwork(nn.Module):
         # Value head
         # ---------------------------
         self.v = nn.Linear(hidden_dim, 1)
-        nn.init.orthogonal_(self.v.weight, gain=1.0)
+        with torch.no_grad():
+            w_cpu = self.v.weight.detach().cpu()
+            nn.init.orthogonal_(w_cpu, gain=1.0)
+            self.v.weight.copy_(w_cpu.to(self.v.weight.device))
         nn.init.zeros_(self.v.bias)
 
     def forward(self, x):

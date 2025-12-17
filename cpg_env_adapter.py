@@ -16,7 +16,6 @@ import numpy as np
 from typing import Tuple, Optional
 from env.swim_gs_env import GenesisSwimmingSimulation
 from env.cpg import PhaseOscillatorNetwork, MatsuokaNetwork
-from fluid_disturbance import FluidDisturbance
 
 
 class SwimmingCPGEnv:
@@ -37,6 +36,8 @@ class SwimmingCPGEnv:
             target_speed: float = 0.3,
             depth_target: float = 0.5,
             max_steps: int = 200,
+            # NOTE: Non-paddle disturbance modes are intentionally disabled for now.
+            # These args are kept for backward compatibility but ignored.
             fluid_disturbance: Optional[str] = None,
             disturbance_intensity: float = 1.0,
             cpg_freq: float = 2.0,
@@ -71,8 +72,8 @@ class SwimmingCPGEnv:
             target_speed: Target forward speed (m/s along +Y)
             depth_target: Target depth (z coordinate)
             max_steps: Maximum steps per episode
-            fluid_disturbance: Disturbance mode (None, "constant", "turbulent", "vortex", "oscillating", "mixed")
-            disturbance_intensity: Disturbance strength multiplier [0, 10]
+            fluid_disturbance: Ignored (non-paddle disturbance modes are disabled)
+            disturbance_intensity: Ignored (non-paddle disturbance modes are disabled)
             cpg_freq: CPG base frequency in Hz (default: 2.0)
             cpg_alpha: CPG coupling strength (default: 1.5)
             cpg_dt: CPG time step (default: None, will use env dt)
@@ -216,24 +217,14 @@ class SwimmingCPGEnv:
             self.cpg = None
             print(f"  No CPG (using direct RL joint control)")
 
-        # Initialize fluid disturbance (original disturbance system)
-        if fluid_disturbance is not None and fluid_disturbance != "none":
-            print(f"  Initializing fluid disturbance...")
-            self.disturbance = FluidDisturbance(
-                mode=fluid_disturbance,
-                intensity=disturbance_intensity,
-                enable=True,
-                randomize=True
-            )
-            print(f"    ✓ FluidDisturbance created (mode={fluid_disturbance}, intensity={disturbance_intensity})")
-            print(f"    ⚠️  WARNING: randomize=True 會導致每個 epoch 結果不同！")
-        else:
-            self.disturbance = None
-            print(f"  ✅ No fluid disturbance (deterministic mode)")
+        # Non-paddle disturbance modes are disabled.
+        self.disturbance = None
+        if fluid_disturbance not in (None, "none"):
+            print("  NOTE: fluid_disturbance is currently disabled; ignoring the provided mode.")
 
         # Display disturbance status summary
         print(f"\n  📊 Disturbance Status:")
-        print(f"    - Fluid disturbance: {'ENABLED (randomize=True)' if self.disturbance else 'DISABLED'}")
+        print(f"    - Fluid disturbance: DISABLED")
         print(f"    - Paddle disturbance: {'ENABLED' if enable_paddle_disturbance else 'DISABLED'}")
 
         print(f"{'='*70}\n")
@@ -367,12 +358,7 @@ class SwimmingCPGEnv:
                 ).astype(np.float32)
                 print(f"    ✓ CPG theta randomized")
                                       
-        # Reset fluid disturbance (original disturbance system)
-        if self.disturbance is not None:
-            print(f"  Resetting fluid disturbance...")
-            self.disturbance.reset(dt=self.dt)
-            info = self.disturbance.get_current_info()
-            print(f"    ✓ Disturbance reset: mode={info['mode']}, intensity={info['intensity']:.2f}")
+        # No-op: non-paddle disturbance modes are disabled.
 
         # Get initial observation
         obs = self._get_obs()
@@ -542,9 +528,7 @@ class SwimmingCPGEnv:
             if self.debug:
                 print(f"Warning: Failed to apply joint actions: {e}")
 
-        # Apply fluid disturbance (original disturbance system)
-        if self.disturbance is not None:
-            self.disturbance.apply_disturbance(self.sim.water)
+        # No-op: non-paddle disturbance modes are disabled.
 
         # NEW: Step physics using step_simulation() to update paddles
         for _ in range(sim_steps):

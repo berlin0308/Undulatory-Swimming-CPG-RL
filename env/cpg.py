@@ -111,7 +111,7 @@ class PhaseOscillatorNetwork:
     
     def reset(self):
         """Reset oscillator states with fixed wave pattern using arange."""
-        # 使用 arange 產生固定的相位分佈
+        # Use arange to generate a deterministic phase pattern.
         self.theta = np.arange(self.num_joints, dtype=np.float32) * (self.total_phase_offset / (self.num_joints + 1))
 
 
@@ -139,7 +139,7 @@ class MatsuokaNetwork:
         
         self.dt = 0.01  # Time step
 
-        # Initialize with fixed wave pattern using arange (避免隨機性)
+        # Initialize with a deterministic wave pattern using arange.
         phase = np.arange(num_joints, dtype=np.float32) * (2 * np.pi / num_joints)
         self.x_a[:] = 0.1 * np.sin(phase)
         self.x_b[:] = 0.1 * np.cos(phase)
@@ -175,7 +175,7 @@ class MatsuokaNetwork:
     
     def reset(self):
         """Reset oscillator states with fixed wave pattern using arange."""
-        # 使用 arange 產生固定的波形初始化，避免隨機性
+        # Use arange to generate a deterministic initial waveform.
         phase = np.arange(self.num_joints, dtype=np.float32) * (2 * np.pi / self.num_joints)
         self.x_a = 0.1 * np.sin(phase).astype(np.float32)
         self.x_b = 0.1 * np.cos(phase).astype(np.float32)
