@@ -9,11 +9,6 @@ Hybrid control for a swimming robot: **CPG (Central Pattern Generator)** and **R
 - **Genesis SPH Simulation**: high-fidelity water simulation (backend auto-selected)
 
 
-## Report & Slides
-
-- [Final report (PDF)](https://drive.google.com/file/d/1-rkVcRfrzAJNvsdxhwD7sjyyPeUdQj_k/view?usp=drive_link)
-- [Slides](https://docs.google.com/presentation/d/1Vud8cceVkI4Xqtnn5zXhVna2Ju6DfnQXgmQNLcgvPE8/edit?usp=drive_link)
-
 ## Installation
 
 ### Prerequisites
@@ -59,11 +54,6 @@ Enable paddle disturbance:
 - **`--paddle-freq`**: oscillation frequency (Hz)
 - **`--paddle-amp`**: oscillation amplitude (m)
 
-## Control interface (CPG-RL)
-
-In `--mode cpg_rl`, PPO outputs CPG modulation parameters:
-
-- **Action (5D)**: `[freq_mod, amp_mod, phase_shift, w_forward, w_backward]`
 
 ## Platform notes
 
@@ -107,3 +97,4 @@ This repo treats `wandb` as optional. If you want W&B logging:
 ```bash
 pip install wandb
 ```
+
