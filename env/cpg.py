@@ -1,252 +1,183 @@
 #!/usr/bin/env python3
 """
-CPG (Central Pattern Generator) implementations for swimming robot.
-Implements both phase oscillator and Matsuoka oscillator models.
-Based on agnathax-simulation implementation.
+CPG (Central Pattern Generator) models for swimming robot control.
+
+Provides two oscillator models:
+- PhaseOscillatorNetwork: Simple phase-based oscillator
+- MatsuokaNetwork: Biologically-inspired Matsuoka oscillator
 """
 
 import numpy as np
 
+
 class PhaseOscillatorNetwork:
-    """
-    Phase oscillator network exactly as implemented in agnathax-simulation.
-    Based on cpg_single_chain.cdn file.
-    """
-    def __init__(self, 
-                 num_joints=6,
-                 freq=5.0,
-                 w_up=10.0,
-                 w_down=30.0,
-                 prop_fb=0.0,
-                 ext_fb=0.0,
-                 kappa=0.0,
-                 nb_fb=0.0,
-                 tau=0.01,
-                 alpha=1.0,
-                 time_step=0.005
-                 ):
-        
+    """Phase oscillator-based CPG network for rhythmic joint control."""
+    
+    def __init__(self, num_joints: int, alpha: float = 1.5, freq: float = 1.0,
+                 couple: bool = True, couple_w_forward: float = 1.0, couple_w_backward: float = 1.0,
+                 total_phase_offset: float = 2.0 * np.pi, dt: float = 0.01):
+        """
+        Initialize phase oscillator network.
+
+        Args:
+            num_joints: Number of joints to control
+            alpha: Coupling strength between oscillators
+            freq: Base frequency in Hz
+            couple: Enable oscillator coupling (default: True)
+            couple_w_forward: Forward coupling weight (i -> i+1)
+            couple_w_backward: Backward coupling weight (i -> i-1)
+            total_phase_offset: Total phase span across all joints (default: 2π)
+            dt: Time step for integration (should match environment dt)
+        """
         self.num_joints = num_joints
-        self.freq = freq
-        self.w_up = w_up
-        self.w_down = w_down
-        self.prop_fb = prop_fb
-        self.ext_fb = ext_fb
-        self.kappa = kappa
-        self.nb_fb = nb_fb
-        self.tau = tau
-        self.dt = time_step
         self.alpha = alpha
-        
-        # Phase lag calculation exactly as in agnathax
-        self.phi_lag = 2 * np.pi / self.num_joints
-        
-        # Initialize oscillator states with S-shaped pattern
-        # Create S-shaped initial configuration for natural swimming
-        self.theta = np.zeros(self.num_joints)
-        for i in range(self.num_joints):
-            # Create S-shaped pattern: alternating positive/negative phases
-            if i % 2 == 0:
-                self.theta[i] = 0.0  # Even joints start at 0
-            else:
-                self.theta[i] = np.pi  # Odd joints start at π (180°)
-        
-        self.theta_dot = np.zeros(self.num_joints)
-        self.x = self.alpha * np.cos(self.theta)  # Calculate initial output
-        
-    def update(self):
-        """Update phase oscillator network exactly as in agnathax."""
-        # Calculate theta_dot for each oscillator
-        for i in range(self.num_joints):
-            # Base frequency term
-            theta_dot = 2 * np.pi * self.freq
-            
-            # Proprioceptive feedback term
-            theta_dot -= self.prop_fb * np.sin(self.theta[i])
-            
-            # Exteroceptive feedback term
-            theta_dot -= self.ext_fb * np.cos(self.theta[i] + self.kappa)
-            
-            # Neural feedback term
-            theta_dot -= self.nb_fb
-            
-            # Add coupling from other oscillators
-            for j in range(self.num_joints):
-                if i != j:
-                    # Bidirectional coupling with different weights
-                    if j == i + 1:  # Forward coupling (towards tail)
-                        w = self.w_down
-                        phi = -self.phi_lag
-                    elif j == i - 1:  # Backward coupling (towards head)
-                        w = self.w_up
-                        phi = self.phi_lag
-                    else:
-                        continue  # Only adjacent coupling
-                    
-                    theta_dot += w * np.sin(self.theta[j] - self.theta[i] - phi)
-            
-            self.theta_dot[i] = theta_dot
-        
-        # Integrate using Euler method
-        self.theta += self.theta_dot * self.dt
-        
-        # Keep theta in [0, 2π]
+        self.freq = freq
+        self.couple = couple
+        self.couple_w_forward = couple_w_forward
+        self.couple_w_backward = couple_w_backward
+        self.total_phase_offset = total_phase_offset
+        self.dt = dt  # Use provided dt instead of hardcoded value
+
+        # State variables
+        self.theta = np.zeros(num_joints, dtype=np.float32)
+        self.omega = 2.0 * np.pi * freq  # Angular frequency
+
+        # Initialize with slight phase offsets for wave propagation
+        for i in range(num_joints):
+            self.theta[i] = i * (self.total_phase_offset / (num_joints + 1))
+    
+    def step(self, freq_mod: float = 0.0, amp_mod: float = 0.0, phase_shift: float = 0.0,
+             w_forward: float = None, w_backward: float = None, total_phase_offset: float = None) -> np.ndarray:
+        """
+        Update oscillator phases and return joint angle commands.
+
+        Args:
+            freq_mod: Frequency modulation (multiplier, base=1.0)
+            amp_mod: Amplitude modulation (additive, base=1.0)
+            phase_shift: Global phase shift (radians)
+            w_forward: Forward coupling weight (overrides default if provided)
+            w_backward: Backward coupling weight (overrides default if provided)
+            total_phase_offset: Total phase span (overrides default if provided)
+
+        Returns:
+            Array of joint angles (sinusoidal output)
+        """
+        # Apply frequency modulation (clamp to reasonable range)
+        freq_multiplier = np.clip(1.0 + freq_mod, 0.5, 2.0)
+        omega_modulated = self.omega * freq_multiplier
+
+        # Use provided weights or fall back to defaults
+        wf = w_forward if w_forward is not None else self.couple_w_forward
+        wb = w_backward if w_backward is not None else self.couple_w_backward
+
+        # Update total_phase_offset if provided (allows dynamic modulation)
+        if total_phase_offset is not None:
+            self.total_phase_offset = total_phase_offset
+
+        # Compute phase updates
+        if self.couple:
+            # Phase coupling: Kuramoto-style nearest-neighbor coupling
+            # dθ_i/dt = ω + Σ K_ij × sin(θ_j - θ_i)
+            dtheta = np.zeros(self.num_joints, dtype=np.float32)
+
+            for i in range(self.num_joints):
+                coupling_term = 0.0
+
+                # Forward coupling (i -> i+1)
+                if i < self.num_joints - 1:
+                    phase_diff = self.theta[i+1] - self.theta[i]
+                    coupling_term += self.alpha * wf * np.sin(phase_diff)
+
+                # Backward coupling (i-1 -> i)
+                if i > 0:
+                    phase_diff = self.theta[i-1] - self.theta[i]
+                    coupling_term += self.alpha * wb * np.sin(phase_diff)
+
+                dtheta[i] = omega_modulated + coupling_term
+
+            self.theta += dtheta * self.dt
+        else:
+            # No coupling: independent oscillators
+            self.theta += omega_modulated * self.dt
+
         self.theta = self.theta % (2 * np.pi)
-        
-        # Calculate output x = alpha * cos(theta)
-        self.x = self.alpha * np.cos(self.theta)
-        
-        return self.x.copy()
+
+        # Convert phases to joint angles with amplitude modulation and phase shift
+        # Amplitude: base=1.0, clamp to [0.2, 1.5]
+        amplitude = np.clip(1.0 + amp_mod, 0.2, 1.5)
+        joint_angles = amplitude * np.sin(self.theta + phase_shift)
+
+        return joint_angles.astype(np.float32)
     
-    def step(self):
-        """Alias for update() method for compatibility."""
-        return self.update()
-    
-    def get_theta(self):
-        """Get current phase angles."""
-        return self.theta.copy()
-    
-    def get_theta_dot(self):
-        """Get current phase velocities."""
-        return self.theta_dot.copy()
-    
-    def get_x(self):
-        """Get current oscillator outputs."""
-        return self.x.copy()
+    def reset(self):
+        """Reset oscillator states with fixed wave pattern using arange."""
+        # 使用 arange 產生固定的相位分佈
+        self.theta = np.arange(self.num_joints, dtype=np.float32) * (self.total_phase_offset / (self.num_joints + 1))
 
 
 class MatsuokaNetwork:
-    """
-    Matsuoka oscillator network exactly as implemented in agnathax-simulation.
-    Based on matsuoka_network.cdn file.
-    """
-    def __init__(self,
-                 num_joints=6,
-                 beta=5.0,
-                 eta=-3.0,
-                 gamma=3.0,
-                 eta_i=-2.0,
-                 eta_e=1.0,
-                 eta_head=0.0,
-                 tonic=50.0,
-                 force=0.0,
-                 tau=0.05,
-                 fb_i=-10.0,
-                 fb_e=1.0,
-                 time_step=0.005):
+    """Matsuoka oscillator-based CPG network."""
+    
+    def __init__(self, num_joints: int, tau: float = 0.1, beta: float = 2.5):
+        """
+        Initialize Matsuoka oscillator network.
         
+        Args:
+            num_joints: Number of joints to control
+            tau: Time constant
+            beta: Mutual inhibition strength
+        """
         self.num_joints = num_joints
-        self.beta = beta
-        self.eta = eta
-        self.gamma = gamma
-        self.eta_i = eta_i
-        self.eta_e = eta_e
-        self.eta_head = eta_head
-        self.tonic = tonic
-        self.force = force
         self.tau = tau
-        self.fb_i = fb_i
-        self.fb_e = fb_e
-        self.dt = time_step
+        self.beta = beta
         
-        # Initialize Matsuoka oscillator states with S-shaped pattern
-        # Each oscillator has two neurons: x_a, v_a, x_b, v_b
-        self.x_a = np.zeros(self.num_joints)
-        self.v_a = np.zeros(self.num_joints)
-        self.x_b = np.zeros(self.num_joints)
-        self.v_b = np.zeros(self.num_joints)
+        # State variables (flexor and extensor neurons)
+        self.x_a = np.zeros(num_joints, dtype=np.float32)
+        self.x_b = np.zeros(num_joints, dtype=np.float32)
+        self.v_a = np.zeros(num_joints, dtype=np.float32)
+        self.v_b = np.zeros(num_joints, dtype=np.float32)
         
-        # Create S-shaped initial configuration
-        for i in range(self.num_joints):
-            if i % 2 == 0:
-                # Even joints: activate neuron A
-                self.x_a[i] = 0.1
-                self.x_b[i] = 0.0
-            else:
-                # Odd joints: activate neuron B
-                self.x_a[i] = 0.0
-                self.x_b[i] = 0.1
-        
-        # Output states
-        self.xx_a = self.x_a * (self.x_a > 0)
-        self.xx_b = self.x_b * (self.x_b > 0)
-        
-    def update(self):
-        """Update Matsuoka oscillator network exactly as in agnathax."""
-        # Calculate rectified outputs
-        self.xx_a = self.x_a * (self.x_a > 0)
-        self.xx_b = self.x_b * (self.x_b > 0)
-        
-        # Calculate derivatives for each oscillator
-        x_a_dot = np.zeros(self.num_joints)
-        v_a_dot = np.zeros(self.num_joints)
-        x_b_dot = np.zeros(self.num_joints)
-        v_b_dot = np.zeros(self.num_joints)
-        
-        for i in range(self.num_joints):
-            # Force feedback terms
-            force_l = self.force * (self.force >= 0.0)
-            force_r = -self.force * (self.force < 0.0)
-            
-            fb_c_a = force_l * self.fb_i
-            fb_i_a = force_l * self.fb_e
-            fb_c_b = force_r * self.fb_i
-            fb_i_b = force_r * self.fb_e
-            
-            # Neuron A dynamics
-            x_a_dot[i] = (-1/self.tau * (self.x_a[i] + self.beta*self.v_a[i] - self.eta*self.xx_b[i] - self.tonic) + 
-                         fb_i_a + fb_c_b)
-            v_a_dot[i] = (-self.v_a[i] + self.xx_a[i]) / (self.tau * self.gamma)
-            
-            # Neuron B dynamics
-            x_b_dot[i] = (-1/self.tau * (self.x_b[i] + self.beta*self.v_b[i] - self.eta*self.xx_a[i] - self.tonic) + 
-                         fb_c_a + fb_i_b)
-            v_b_dot[i] = (-self.v_b[i] + self.xx_b[i]) / (self.tau * self.gamma)
-            
-            # Add coupling from other oscillators
-            for j in range(self.num_joints):
-                if i != j:
-                    if j == i + 1:  # Forward coupling (towards tail)
-                        # Ipsilateral coupling
-                        x_a_dot[i] += self.eta_e/self.tau * self.xx_a[j] * (self.xx_a[j] > 0)
-                        x_b_dot[i] += self.eta_e/self.tau * self.xx_b[j] * (self.xx_b[j] > 0)
-                        
-                        # Contralateral coupling
-                        x_a_dot[i] += self.eta_i/self.tau * self.xx_b[j] * (self.xx_b[j] > 0)
-                        x_b_dot[i] += self.eta_i/self.tau * self.xx_a[j] * (self.xx_a[j] > 0)
-            
-            # Self-excitation for first oscillator (head)
-            if i == 0:
-                x_a_dot[i] += self.eta_head/self.tau * self.xx_a[i] * (self.xx_a[i] > 0)
-                x_b_dot[i] += self.eta_head/self.tau * self.xx_b[i] * (self.xx_b[i] > 0)
-        
-        # Integrate using Euler method
-        self.x_a += x_a_dot * self.dt
-        self.v_a += v_a_dot * self.dt
-        self.x_b += x_b_dot * self.dt
-        self.v_b += v_b_dot * self.dt
-        
-        # Calculate output as difference between neurons
-        output = self.xx_a - self.xx_b
-        
-        return output.copy()
+        self.dt = 0.01  # Time step
+
+        # Initialize with fixed wave pattern using arange (避免隨機性)
+        phase = np.arange(num_joints, dtype=np.float32) * (2 * np.pi / num_joints)
+        self.x_a[:] = 0.1 * np.sin(phase)
+        self.x_b[:] = 0.1 * np.cos(phase)
     
-    def step(self):
-        """Alias for update() method for compatibility."""
-        return self.update()
+    def step(self) -> np.ndarray:
+        """
+        Update Matsuoka oscillator states and return joint angles.
+        
+        Returns:
+            Array of joint angles (difference between flexor and extensor)
+        """
+        # Tonic input
+        tonic = 1.0
+        
+        # Adaptation dynamics
+        dv_a = (-self.v_a + self.x_a) / (2.0 * self.tau)
+        dv_b = (-self.v_b + self.x_b) / (2.0 * self.tau)
+        
+        # Neuron dynamics with mutual inhibition
+        dx_a = (-self.x_a - self.beta * self.x_b - self.v_a + tonic) / self.tau
+        dx_b = (-self.x_b - self.beta * self.x_a - self.v_b + tonic) / self.tau
+        
+        # Update states
+        self.x_a += dx_a * self.dt
+        self.x_b += dx_b * self.dt
+        self.v_a += dv_a * self.dt
+        self.v_b += dv_b * self.dt
+        
+        # Output is difference between flexor and extensor
+        joint_angles = self.x_a - self.x_b
+        
+        return joint_angles.astype(np.float32)
     
-    def get_x_a(self):
-        """Get current neuron A states."""
-        return self.x_a.copy()
-    
-    def get_x_b(self):
-        """Get current neuron B states."""
-        return self.x_b.copy()
-    
-    def get_xx_a(self):
-        """Get current rectified neuron A outputs."""
-        return self.xx_a.copy()
-    
-    def get_xx_b(self):
-        """Get current rectified neuron B outputs."""
-        return self.xx_b.copy()
+    def reset(self):
+        """Reset oscillator states with fixed wave pattern using arange."""
+        # 使用 arange 產生固定的波形初始化，避免隨機性
+        phase = np.arange(self.num_joints, dtype=np.float32) * (2 * np.pi / self.num_joints)
+        self.x_a = 0.1 * np.sin(phase).astype(np.float32)
+        self.x_b = 0.1 * np.cos(phase).astype(np.float32)
+        self.v_a = np.zeros(self.num_joints, dtype=np.float32)
+        self.v_b = np.zeros(self.num_joints, dtype=np.float32)

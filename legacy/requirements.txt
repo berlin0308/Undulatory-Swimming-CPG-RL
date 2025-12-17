@@ -1,0 +1,7 @@
+numpy<2.0.0  
+matplotlib 
+gymnasium
+pybullet 
+stable-baselines3
+pyqt5
+shimmy

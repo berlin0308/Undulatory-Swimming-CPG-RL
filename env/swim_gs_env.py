@@ -1,638 +1,584 @@
 #!/usr/bin/env python3
 """
-Genesis-based swimming simulation with CPG control
+Genesis swimming simulation with sine-wave joint trajectories (class-based)
 """
 
 import os
-import sys
-import time
+import argparse
 import numpy as np
-import matplotlib.pyplot as plt
-import json
-from datetime import datetime
+import genesis as gs
+import hashlib
 
-# Add the current directory to the path to import env modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-try:
-    import genesis as gs
-    print("✓ Genesis imported successfully")
-except ImportError as e:
-    print(f"✗ Failed to import Genesis: {e}")
-    print("Please install Genesis: pip install genesis-world")
-    sys.exit(1)
+class OscillatingPaddleDisturbance:
+    """振荡桨叶扰动器 - Z轴上下运动产生波浪"""
 
-from .cpg import PhaseOscillatorNetwork, MatsuokaNetwork
+    def __init__(self, scene, n_paddles=10, water_bounds=None, swim_zone=None,
+                 oscillation_freq=3.5, oscillation_amplitude=0.10,
+                 paddle_size=(0.55, 0.25, 0.1), paddle_mass=3000.0, seed=42):
+        """
+        Args:
+            scene: Genesis场景对象（必须在scene.build()之前传入）
+            n_paddles: 桨叶数量
+            water_bounds: 水域边界 (min_x, max_x, min_y, max_y, min_z, max_z)
+            swim_zone: X轴游泳区域 (min_x, max_x) - paddle不会放置在这里
+            oscillation_freq: 振荡频率 (Hz)
+            oscillation_amplitude: 振荡幅度 (m)
+            paddle_size: 桨叶尺寸
+            paddle_mass: 桨叶密度
+            seed: 随机种子
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        self.scene = scene
+        self.n_paddles = n_paddles
+        self.water_bounds = water_bounds if water_bounds else (0.0, 2.0, 0.0, 2.0, 0.0, 0.4)
+        self.swim_zone = swim_zone if swim_zone else (0.3, 1.5)
+        self.oscillation_freq = oscillation_freq
+        self.oscillation_amplitude = oscillation_amplitude
+        self.paddle_size = paddle_size
+        self.paddle_mass = paddle_mass
+        self.paddles = []
+        self.enabled = True
+
+        # 定义左右两侧的X轴区域（避开游泳区域）
+        swim_min_x, swim_max_x = self.swim_zone
+        left_x_range = (self.water_bounds[0] + 0.2, swim_min_x - 0.15)
+        right_x_range = (swim_max_x + 0.15, self.water_bounds[1] - 0.2)
+
+        # 将Y轴分成若干段
+        y_total = self.water_bounds[3] - self.water_bounds[2]
+        n_y_segments = max(2, (n_paddles + 1) // 2)
+        y_segment_size = y_total / n_y_segments
+
+        # 为每个paddle生成参数
+        self.paddle_params = []
+        for i in range(n_paddles):
+            # 交替左右放置
+            if i % 2 == 0:
+                x_range = left_x_range
+            else:
+                x_range = right_x_range
+
+            # 分配到不同的Y段
+            y_segment_idx = i // 2
+            if y_segment_idx < n_y_segments:
+                y_start = self.water_bounds[2] + y_segment_idx * y_segment_size + 0.15
+                y_end = self.water_bounds[2] + (y_segment_idx + 1) * y_segment_size - 0.15
+            else:
+                y_start = self.water_bounds[2] + 0.2
+                y_end = self.water_bounds[3] - 0.2
+
+            x_pos = np.random.uniform(x_range[0], x_range[1])
+            y_pos = np.random.uniform(y_start, y_end)
+            z_pos = (self.water_bounds[4] + self.water_bounds[5]) / 2
+
+            params = {
+                'center_x': x_pos,
+                'center_y': y_pos,
+                'center_z': z_pos,
+                'freq': oscillation_freq * np.random.uniform(0.8, 1.2),
+                'amplitude': oscillation_amplitude * np.random.uniform(0.8, 1.2),
+                'phase': np.random.uniform(0, 2 * np.pi),
+            }
+            self.paddle_params.append(params)
+
+        print(f"\n[OscillatingPaddleDisturbance] Configured with {n_paddles} paddles")
+        print(f"  Paddle size: {paddle_size}")
+        print(f"  Oscillation: freq={oscillation_freq}Hz, amp={oscillation_amplitude}m, direction=Z")
+        print(f"  Swim zone (X-axis excluded): x ∈ [{swim_min_x:.2f}, {swim_max_x:.2f}]")
+
+    def add_paddles_to_scene(self):
+        """在scene.build()之前调用此方法添加paddle实体"""
+        for i, params in enumerate(self.paddle_params):
+            paddle = self.scene.add_entity(
+                material=gs.materials.Rigid(rho=self.paddle_mass),
+                morph=gs.morphs.Box(
+                    pos=(params['center_x'], params['center_y'], params['center_z']),
+                    size=self.paddle_size,
+                    euler=(0.0, 0.0, 0.0),
+                ),
+                surface=gs.surfaces.Default(color=(0.9, 0.3, 0.1, 0.9)),
+            )
+            self.paddles.append(paddle)
+
+        print(f"[OscillatingPaddleDisturbance] Added {len(self.paddles)} paddles to scene")
+
+    def update(self, current_time):
+        """每个仿真步调用此方法更新paddle位置"""
+        if not self.enabled or len(self.paddles) == 0:
+            return
+
+        for i, paddle in enumerate(self.paddles):
+            params = self.paddle_params[i]
+
+            # 计算Z轴振荡偏移
+            offset = params['amplitude'] * np.sin(
+                2 * np.pi * params['freq'] * current_time + params['phase']
+            )
+
+            # 新位置（只在Z轴移动）
+            new_pos = np.array([
+                params['center_x'],
+                params['center_y'],
+                params['center_z'] + offset
+            ])
+
+            try:
+                paddle.set_pos(new_pos)
+            except AttributeError:
+                pass  # 如果set_pos不存在，忽略
+
+    def enable(self):
+        """启用扰动"""
+        self.enabled = True
+
+    def disable(self):
+        """禁用扰动"""
+        self.enabled = False
+
 
 class GenesisSwimmingSimulation:
-    """Genesis-based swimming simulation with CPG control."""
-    
-    def __init__(self, cpg_model_type=0, use_gpu=True, record_video=True, debug_mode=False):
-        # Simulation parameters - adjusted for water stability
-        self.SIM_DT = 8e-3  # 8ms time step (smaller for stability)
-        self.SUBSTEPS = 10  # 10 substeps (more for stability)
-        
-        # Adjust particle size based on debug mode
-        if debug_mode:
-            self.PARTICLE_SIZE = 0.04
+    """Genesis swimming simulation for eel robot with optional paddle disturbance."""
+
+    def __init__(self, vis=True, enable_disturbance=False, disturbance_config=None,
+                 record=False, record_dir=None):
+        """
+        Args:
+            vis: 是否启用可视化
+            enable_disturbance: 是否启用paddle扰动
+            disturbance_config: paddle扰动配置字典，例如:
+                {
+                    'n_paddles': 6,
+                    'oscillation_freq': 1.5,
+                    'oscillation_amplitude': 0.10,
+                    'paddle_size': (0.15, 0.15, 0.05),
+                    'paddle_mass': 2000.0,
+                    'swim_zone': (0.6, 0.9),
+                }
+            record: 是否录制视频和流体速度数据
+            record_dir: 录制文件保存目录 (默认为 "./recordings")
+        """
+        self.vis = vis
+        self.enable_disturbance = enable_disturbance
+        self.record = record
+        self.record_dir = record_dir if record_dir else "./recordings"
+        self.SIM_DT = 0.05
+        self.SUBSTEPS = 100
+        self.PARTICLE_SIZE = 0.03
+        self.WATER_BOUNDS = (0.0, 0.0, 0.0), (2.0, 2.0, 1.0)
+        self.SPH_BOUNDS = (0.0, 0.0, 0.0), (2.0, 2.0, 1.0)
+
+        # 用于追踪仿真时间
+        self.sim_time = 0.0
+
+        # 流体速度数据缓冲区
+        self.fluid_velocity_buffer = [] if record else None
+
+        # 创建录制目录
+        if self.record:
+            os.makedirs(self.record_dir, exist_ok=True)
+
+        # Initialize Genesis
+        gs.init(backend=gs.cuda, seed=0, precision="32", logging_level="info")
+
+        # Setup video recording path if enabled
+        if self.record:
+            import time
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            video_filename = f"swim_recording_{timestamp}.mp4"
+            self.video_path = os.path.join(self.record_dir, video_filename)
+            print(f"[INFO] Video recording will be saved to: {self.video_path}")
         else:
-            self.PARTICLE_SIZE = 0.01
-        
-        # Adjust world bounds based on debug mode
-        if debug_mode:
-            # Debug mode: larger X,Y dimensions, lower Z height
-            self.WATER_BOUNDS = (-2.0, -1.0, 0.0), (2.0, 1.0, 0.4)  # Larger X,Y, lower Z
-        else:
-            # Normal mode: original dimensions
-            self.WATER_BOUNDS = (-1.0, -0.5, 0.0), (1.0, 0.5, 1.0)  # Original dimensions
-        
-        self.record_video = record_video
-        self.debug_mode = debug_mode
-        
-        # CPG model type
-        self.cpg_model_type = cpg_model_type
-        if cpg_model_type == 0:
-            self.model_name = "phase_oscillator"
-        else:
-            self.model_name = "matsuoka"
-        
-        print(f"Initializing Genesis swimming simulation with {self.model_name} CPG...")
-        print(f"Debug mode: {debug_mode}")
-        print(f"Record video: {record_video}")
-        
-        # Initialize Genesis first
-        gs.init(backend=gs.gpu if use_gpu else gs.cpu)
-        print("✓ Genesis initialized")
-        
-        # Create scene with options (like run_cpg_gs_old.py)
+            self.video_path = None
+
+        # Build scene
         self.scene = gs.Scene(
-            sim_options=gs.options.SimOptions(
-                dt=self.SIM_DT, 
-                substeps=self.SUBSTEPS, 
-                gravity=(0, 0, -9.8)  # Standard gravity (downward)
-            ),
-            sph_options=gs.options.SPHOptions(
-                lower_bound=self.WATER_BOUNDS[0],
-                upper_bound=self.WATER_BOUNDS[1],
-                particle_size=self.PARTICLE_SIZE,
-            ),
-            vis_options=gs.options.VisOptions(visualize_sph_boundary=True),
-            viewer_options=gs.options.ViewerOptions(
-                camera_pos=(5.0, 0.0, 0.5) if not debug_mode else (0.0, 0.0, 5.0),  # Camera further away
-                camera_lookat=(0.0, 0.0, 0.15) if not debug_mode else (0.0, 0.0, 0.05)  # Debug mode looks at water bottom
-            ),
-            show_viewer=True,  # Enable viewer
+            sim_options=gs.options.SimOptions(dt=self.SIM_DT, substeps=self.SUBSTEPS, gravity=(0,0,-9.81)),
+            mpm_options=gs.options.MPMOptions(lower_bound=self.WATER_BOUNDS[0], upper_bound=self.WATER_BOUNDS[1]),
+            sph_options=gs.options.SPHOptions(lower_bound=self.SPH_BOUNDS[0], upper_bound=self.SPH_BOUNDS[1], particle_size=self.PARTICLE_SIZE),
+            vis_options=gs.options.VisOptions(visualize_sph_boundary=False, visualize_mpm_boundary=False),
+            viewer_options=gs.options.ViewerOptions(camera_pos=(1.0,1.0,5.0), camera_lookat=(1.0,1.0,0.0), camera_fov=40, max_FPS=200),
+            show_viewer=self.vis
         )
-        
-        # Add ground
+
+        # Add ground plane
         self.scene.add_entity(gs.morphs.Plane())
-        
-        # Add water - adjust size based on debug mode
-        if debug_mode:
-            # Debug mode: larger X,Y dimensions, lower Z height
-            water_height = 0.4  # Water height
-            water_center_z = 0.2  # Water center (0 + 0.4/2 = 0.2)
-            water_x_size = 4.0  # X-axis size (from -2.0 to 2.0)
-            water_y_size = 2.0  # Y-axis size (from -1.0 to 1.0)
-        else:
-            # Normal mode: original dimensions
-            water_height = 1.0  # Height of water
-            water_center_z = 0.5  # Center of water
-            water_x_size = 2.0  # X-axis size
-            water_y_size = 1.0  # Y-axis size
-        
-        self.liquid = self.scene.add_entity(
-            material=gs.materials.SPH.Liquid(
-                sampler='regular',  # Regular sampling for macOS compatibility
-                mu=0.01,  # Viscosity - lower value for more stable water
-                gamma=0.02,  # Surface tension - higher value to prevent collapse
-            ),
-            morph=gs.morphs.Box(
-                pos=(0.0, 0.0, water_center_z),  # Use calculated center position
-                size=(water_x_size, water_y_size, water_height)  # Use calculated dimensions
-            ),
-            surface=gs.surfaces.Default(color=(0.4, 0.8, 1.0, 0.05), vis_mode="particle"),  # Almost transparent (Alpha=0.1)
+
+        # Add water (store reference for potential future use)
+        self.water = self.scene.add_entity(
+            material=gs.materials.SPH.Liquid(rho=1000.0, mu=0.0001, sampler="regular"),
+            morph=gs.morphs.Box(pos=(1.0,1.0,0.2), size=(2.0,2.0,0.4), fixed=False),
+            surface=gs.surfaces.Default(color=(0.2,0.6,1.0,0.05))
         )
-        
-        # Load 6-joint swimming robot URDF
-        urdf_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assem_description/urdf/assem_description_6joints.urdf')
-        print(f"Loading 6-joint swimming robot URDF from: {urdf_path}")
-        
-        robot_z = 0.1  # Robot at bottom of water (near ground level)
-        print(f"Debug mode: Robot positioned at water bottom")
-        
-        # Load robot using the working method from run_cpg_gs_old.py
-        try:
-            # Method 1: Standard URDF loading
-            self.robot = self.scene.add_entity(
-                material=gs.materials.Rigid(),
-                morph=gs.morphs.URDF(file=urdf_path, fixed=False, pos=(0.0, 0.0, robot_z)),
-                surface=gs.surfaces.Default(color=(0.79216, 0.81961, 0.93333)),
+
+        # Load eel robot
+        # Use relative path from repository root
+        script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        urdf_path = os.path.join(script_dir, "urdf", "eelrobotv2_urdf.urdf")
+        self.robot = self.scene.add_entity(
+            material=gs.materials.Rigid(needs_coup=True, coup_friction=0.1),
+            morph=gs.morphs.URDF(file=urdf_path, pos=(1.0,1.0,0.5), euler=(0,0,0), fixed=False)
+        )
+
+        # Initialize paddle disturbance (before scene.build())
+        self.disturbance = None
+        if enable_disturbance:
+            print(f"\n{'='*70}")
+            print(f"🌊 Initializing Paddle Disturbance")
+            print(f"{'='*70}")
+            
+            # 默认配置
+            default_config = {
+                'n_paddles': 10,
+                'oscillation_freq': 1.5,
+                'oscillation_amplitude': 0.10,
+                'paddle_size': (0.2, 0.2, 0.1),
+                'paddle_mass': 3000.0,
+                'swim_zone': (0.6, 0.9),
+            }
+            
+            # 合并用户配置
+            if disturbance_config:
+                default_config.update(disturbance_config)
+            
+            self.disturbance = OscillatingPaddleDisturbance(
+                scene=self.scene,
+                water_bounds=(0.0, 2.0, 0.0, 2.0, 0.0, 0.4),
+                **default_config
             )
-            print("Loaded robot using standard URDF method")
-        except Exception as e:
-            print(f"Standard URDF loading failed: {e}")
-        
-        # Try to enable joint control after loading (like run_cpg_gs_old.py)
-        try:
-            # Method: Enable joint control after robot is loaded
-            if hasattr(self.robot, 'enable_joint_control'):
-                self.robot.enable_joint_control(True)
-                print("Enabled joint control after loading")
-            elif hasattr(self.robot, 'set_joint_control_enabled'):
-                self.robot.set_joint_control_enabled(True)
-                print("Set joint control enabled after loading")
             
-            # Try to set joint control parameters
-            if hasattr(self.robot, 'set_dofs_kp'):
-                # Set high stiffness for all joints
-                kp_values = np.array([1000.0] * 7)  # High stiffness
-                self.robot.set_dofs_kp(kp_values)
-                print("Set high stiffness for all joints")
-            
-            if hasattr(self.robot, 'set_dofs_kv'):
-                # Set high damping for all joints
-                kv_values = np.array([100.0] * 7)  # High damping
-                self.robot.set_dofs_kv(kv_values)
-                print("Set high damping for all joints")
-                
-        except Exception as enable_error:
-            print(f"Failed to enable joint control: {enable_error}")
-        
-        # Set up joint control according to Genesis documentation
-        try:
-            # Get joint names and DOF indices according to Genesis documentation
-            self.joint_names = []
-            self.dofs_idx = []
-            
-            # Get joint names from robot
-            for i in range(self.robot.n_joints):
-                joint = self.robot.get_joint(i)
-                if hasattr(joint, 'name'):
-                    self.joint_names.append(joint.name)
-                    # Get local DOF index for each joint
-                    if hasattr(joint, 'dof_idx_local'):
-                        self.dofs_idx.append(joint.dof_idx_local)
-                    else:
-                        self.dofs_idx.append(i)  # Fallback to joint index
-                else:
-                    self.joint_names.append(f"joint_{i}")
-                    self.dofs_idx.append(i)
-            
-            print(f"Joint names: {self.joint_names}")
-            print(f"DOF indices: {self.dofs_idx}")
-            
-        except Exception as e:
-            print(f"Failed to set up joint control: {e}")
-            # Fallback: use simple indices
-            self.dofs_idx = list(range(7))  # Assume 7 joints
-            self.joint_names = [f"joint_{i}" for i in range(7)]
-        
-        # Initialize CPG network
-        if cpg_model_type == 0:
-            self.cpg = PhaseOscillatorNetwork(num_joints=7, freq=5.0)  # 7 joints, 5Hz frequency
-        else:
-            self.cpg = MatsuokaNetwork(num_joints=7, tonic=50.0)  # 7 joints, 50Hz tonic input
-        
-        print(f"✓ CPG network initialized: {self.model_name}")
-        
-        # Test CPG output
-        test_output = self.cpg.step()
-        print(f"✓ CPG test output: {test_output[:3]}... (first 3 joints)")
-        
-        # Add camera for video recording (like run_cpg_gs_old.py)
-        if self.record_video:
-            # Debug mode camera looks down at water bottom, normal mode keeps original view
-            if debug_mode:
-                cam_pos = (0.0, 0.0, 2.5)  # Look from above, further away
-                cam_lookat = (0.0, 0.0, 0.05)  # Look at water bottom
-                print("Debug mode: Camera positioned above for top-down view of robot at water bottom")
-            else:
-                cam_pos = (5.0, 0.0, 0.5)  # Camera further away
-                cam_lookat = (0.0, 0.0, 0.15)  # Original view
-            
-            self.cam = self.scene.add_camera(
-                res=(640, 480),
-                pos=cam_pos,
-                lookat=cam_lookat,
-                fov=45,
-                GUI=False,  # Disable GUI for video recording
+            # 添加paddle到场景（必须在build之前）
+            self.disturbance.add_paddles_to_scene()
+            print(f"{'='*70}\n")
+
+        # Add recording camera if enabled (MUST be before scene.build())
+        self.camera = None
+        if self.record and self.video_path:
+            print("[INFO] Adding recording camera...")
+            self.camera = self.scene.add_camera(
+                res=(1280, 960),
+                pos=(1.0, 1.0, 5.0),
+                lookat=(1.0, 1.0, 0.0),
+                fov=40,
+                GUI=False  # No display window
             )
-            print("Camera added for video recording")
-        
-        # Build scene (like run_cpg_gs_old.py)
+            print(f"[INFO] Recording camera added")
+
+        # Build scene (MUST be after adding all entities including cameras)
+        print("[INFO] Building scene...")
         self.scene.build()
-        
-        # Try to enable joint control if needed
-        try:
-            # Check if robot needs joint control to be enabled
-            if hasattr(self.robot, 'enable_joint_control'):
-                self.robot.enable_joint_control(True)
-                print("Enabled joint control for robot")
-            elif hasattr(self.robot, 'set_joint_control_enabled'):
-                self.robot.set_joint_control_enabled(True)
-                print("Set joint control enabled for robot")
-        except Exception as e:
-            print(f"Could not enable joint control: {e}")
-        
-        # Start video recording (exactly like run_cpg_gs_old.py)
-        if self.record_video:
-            os.makedirs("videos", exist_ok=True)
-            try:
-                print("Starting video recording...")
-                self.cam.start_recording()
-                print("Video recording started successfully!")
-                # Give camera time to initialize
-                # import time
-                # time.sleep(0.5)
-            except Exception as e:
-                print(f"Error starting video recording: {e}")
-                print("Disabling video recording...")
-                self.record_video = False
-        
-        # Initialize data logging
-        self.joint_angles_log = []
-        self.robot_positions_log = []
-        self.cpg_output_log = []
-        self.step_count = 0
-        
-        print("✓ Genesis swimming simulation initialized successfully!")
-    
-    def apply_joint_actions(self, joint_angles):
-        """Apply joint angles to robot using Genesis official method."""
-        # Store desired angles
-        self.desired_joint_angles = joint_angles
-        
-        # Debug: Print joint angles occasionally
-        if not hasattr(self, 'joint_debug_count'):
-            self.joint_debug_count = 0
-        self.joint_debug_count += 1
-        
-        if self.joint_debug_count % 10 == 0:  # Print every 10 steps for debugging
-            print(f"Step {self.joint_debug_count}: Joint angles to apply: {joint_angles}")
-        
-        # Check for nan values in joint angles to prevent instability
-        if np.any(np.isnan(joint_angles)) or np.any(np.isinf(joint_angles)):
-            if self.joint_debug_count % 10 == 0:
-                print(f"  ⚠️  Warning: Invalid joint angles detected (nan/inf), skipping control")
-            return
-        
-        # Use Genesis official set_dofs_position method (hard reset) - This is the working method
-        try:
-            if hasattr(self.robot, 'set_dofs_position') and hasattr(self, 'dofs_idx'):
-                self.robot.set_dofs_position(
-                    joint_angles,
-                    self.dofs_idx
-                )
-                if self.joint_debug_count % 10 == 0:
-                    print(f"  ✓ Used robot.set_dofs_position (hard reset)")
-                return  # Success, exit early
-        except Exception as e:
-            if self.joint_debug_count % 10 == 0:
-                print(f"  ✗ set_dofs_position failed: {e}")
-        
-        # Fallback: If set_dofs_position fails, try other methods
-        if self.joint_debug_count % 10 == 0:
-            print(f"  ⚠️  Primary method failed, trying fallback methods...")
-        
-        # Fallback method 1: Try robot-level joint control
-        try:
-            if hasattr(self.robot, 'set_joint_positions'):
-                self.robot.set_joint_positions(joint_angles)
-                if self.joint_debug_count % 10 == 0:
-                    print(f"  ✓ Used robot.set_joint_positions fallback")
-                return
-        except Exception as e:
-            if self.joint_debug_count % 10 == 0:
-                print(f"  ✗ robot.set_joint_positions fallback failed: {e}")
-        
-        # Fallback method 2: Try scene-level joint control
-        try:
-            if hasattr(self.scene, 'set_joint_positions'):
-                self.scene.set_joint_positions(self.robot, joint_angles)
-                if self.joint_debug_count % 10 == 0:
-                    print(f"  ✓ Used scene.set_joint_positions fallback")
-                return
-        except Exception as e:
-            if self.joint_debug_count % 10 == 0:
-                print(f"  ✗ scene.set_joint_positions fallback failed: {e}")
-        
-        # If all methods fail
-        if self.joint_debug_count % 10 == 0:
-            print(f"  ✗ All joint control methods failed")
-    
-    def step(self):
-        """Step the simulation."""
-        import time
-        
-        # Record start time for FPS calculation
-        step_start_time = time.time()
-        
-        # Step CPG network
-        desired_joint_angles = self.cpg.step()
-        
-        # Check if CPG returned valid output
-        if desired_joint_angles is None:
-            print(f"Warning: CPG returned None, using zeros")
-            desired_joint_angles = np.zeros(7)
-        
-        # Log CPG output
-        self.cpg_output_log.append(desired_joint_angles.copy())
-        
-        # Debug: Print CPG output occasionally
-        if self.step_count % 25 == 0:  # Print every 25 steps
-            print(f"Step {self.step_count}: CPG output = {desired_joint_angles}")
-        
-        # Apply joint actions
-        self.apply_joint_actions(desired_joint_angles)
-        
-        # Verify joint control is working by checking actual joint positions
-        if self.step_count % 25 == 0:  # Check every 25 steps for more frequent verification
-            try:
-                current_qpos = self.robot.get_qpos()
-                if current_qpos is not None:
-                    # Handle Tensor object
-                    if hasattr(current_qpos, 'numpy'):
-                        qpos_array = current_qpos.numpy()
-                    elif hasattr(current_qpos, 'tolist'):
-                        qpos_array = np.array(current_qpos.tolist())
-                    else:
-                        qpos_array = np.array(list(current_qpos))
-                    
-                    # Check for nan values in qpos
-                    if np.any(np.isnan(qpos_array)) or np.any(np.isinf(qpos_array)):
-                        print(f"Step {self.step_count}: ⚠️  CRITICAL: qpos contains nan/inf values!")
-                        print(f"  qpos array: {qpos_array}")
-                        print(f"  This indicates serious physics instability!")
-                        # Try to reset robot to prevent further instability
-                        try:
-                            print(f"  🔄 Attempting to reset robot position...")
-                            self.robot.set_qpos(np.zeros_like(qpos_array))
-                        except Exception as reset_error:
-                            print(f"  ✗ Robot reset failed: {reset_error}")
-                        return
-                    
-                    print(f"Step {self.step_count}: Joint verification:")
-                    print(f"  Desired angles shape: {desired_joint_angles.shape}, values: {desired_joint_angles}")
-                    print(f"  Actual qpos shape: {qpos_array.shape}, values: {qpos_array}")
-                    
-                    # Extract joint angles from qpos (assuming first 7 values are joint angles)
-                    if qpos_array.shape[0] >= 7:
-                        actual_joint_angles = qpos_array[:7]  # First 7 values are joint angles
-                        print(f"  Actual joint angles: {actual_joint_angles}")
-                        print(f"  Difference: {np.abs(desired_joint_angles - actual_joint_angles)}")
-                    else:
-                        print(f"  ⚠️  qpos array too small: {qpos_array.shape[0]} < 7")
-                    
-                    # Check if joints are actually moving
-                    if not hasattr(self, 'prev_joint_angles'):
-                        if qpos_array.shape[0] >= 7:
-                            self.prev_joint_angles = qpos_array[:7].copy()
-                            print(f"  📊 Initial joint positions recorded")
-                    else:
-                        if qpos_array.shape[0] >= 7:
-                            current_joint_angles = qpos_array[:7]
-                            movement = np.abs(current_joint_angles - self.prev_joint_angles)
-                            max_movement = np.max(movement)
-                            print(f"  Max joint movement: {max_movement:.6f}")
-                            if max_movement > 0.001:  # Significant movement threshold
-                                print(f"  ✅ Joints are moving! Max movement: {max_movement:.6f}")
-                            else:
-                                print(f"  ⚠️  Joints not moving significantly (max: {max_movement:.6f})")
-                            self.prev_joint_angles = current_joint_angles.copy()
-            except Exception as verify_error:
-                print(f"  ✗ Joint verification failed: {verify_error}")
-        
-        # Step simulation with joint control
-        try:
-            # Try to apply joint control before stepping
-            if hasattr(self.scene, 'set_joint_targets'):
-                self.scene.set_joint_targets(self.robot, desired_joint_angles)
-        except Exception as e:
-            pass  # Ignore if this method doesn't exist
-        
-        # Step the simulation
+        # self.scene.build(n_envs=2)
+
+        print("[INFO] Scene built successfully")
+
+        # Start camera recording if enabled
+        if self.record and self.camera:
+            self.camera.start_recording()
+            self.flow_frame_dir = os.path.join(self.record_dir, "flow_frames")
+            os.makedirs(self.flow_frame_dir, exist_ok=True)
+            self.frame_id = 0
+            print(f"[INFO] Camera recording started (will save to: {self.video_path})")
+        else:
+            self.flow_frame_dir = None
+            print("[INFO] Video recording disabled")
+
+
+
+        # Warm-up for stability
+        warmup_steps = int(1.0 / self.SIM_DT)
+        print(f"[INFO] Running warm-up ({warmup_steps} steps)...")
+        for step in range(warmup_steps):
+            if self.disturbance:
+                self.disturbance.update(self.sim_time)
+            self.scene.step()
+            self.sim_time += self.SIM_DT
+        print("[INFO] Warm-up complete")
+
+        # Joint info
+        self.joint_names = ["joint6","joint5","joint4","joint3","joint2","joint1"]
+        self.dofs_idx = [self.robot.get_joint(name).dof_idx_local for name in self.joint_names]
+
+    def get_base_xyz(self):
+        link = self.robot.get_link("base_link")
+        return np.array(link.get_pos().cpu().numpy())
+
+    def step_simulation(self):
+        """执行一步仿真（包括更新paddle）"""
+        # 更新paddle位置
+        if self.disturbance:
+            self.disturbance.update(self.sim_time)
+
+        # 执行物理仿真
         self.scene.step()
-        
-        # Render frame for video (exactly like run_cpg_gs_old.py)
-        if self.record_video and self.cam is not None:
+
+        # Render frame for video recording (if enabled)
+        if self.record and self.camera:
+            self.camera.render()
+
+        # 采集流体速度数据（如果启用录制）
+        if self.record and self.fluid_velocity_buffer is not None:
+            self._collect_fluid_velocity_data()
+            self._save_fluid_speed_frame()
+
+        # 更新仿真时间
+        self.sim_time += self.SIM_DT
+
+    def _collect_fluid_velocity_data(self):
+        """采集当前帧的SPH流体粒子速度数据"""
+        try:
+            # 获取SPH粒子的速度
+            # Genesis中SPH粒子数据存储在entity的state中
+            particle_velocities = self.water.get_state().vel.cpu().numpy()
+            particle_positions = self.water.get_state().pos.cpu().numpy()
+
+            # 计算统计信息以减少数据量
+            frame_data = {
+                "time": float(self.sim_time),
+                "step": len(self.fluid_velocity_buffer),
+                "num_particles": len(particle_velocities),
+                # 速度统计
+                "vel_mean": particle_velocities.mean(axis=0).tolist(),
+                "vel_std": particle_velocities.std(axis=0).tolist(),
+                "vel_max": particle_velocities.max(axis=0).tolist(),
+                "vel_min": particle_velocities.min(axis=0).tolist(),
+                "speed_mean": float(np.linalg.norm(particle_velocities, axis=1).mean()),
+                "speed_max": float(np.linalg.norm(particle_velocities, axis=1).max()),
+                # 位置统计（用于空间分析）
+                "pos_mean": particle_positions.mean(axis=0).tolist(),
+                "pos_std": particle_positions.std(axis=0).tolist(),
+            }
+
+            self.fluid_velocity_buffer.append(frame_data)
+        except Exception as e:
+            # 如果采集失败，记录警告但不中断仿真
+            if len(self.fluid_velocity_buffer) == 0:
+                print(f"[WARNING] Failed to collect fluid velocity data: {e}")
+
+
+    def _save_fluid_speed_frame(self):
+        """Save a CFD-like top-view velocity field with stable log scale, Gaussian smoothing, and quiver arrows."""
+        if not self.record:
+            return
+
+        try:
+            import matplotlib
+            matplotlib.use('Agg')  # Use non-interactive backend to avoid Tkinter threading issues
+            import matplotlib.pyplot as plt
+            from scipy.interpolate import griddata
+            from scipy.ndimage import gaussian_filter
+            import numpy as np
+            import os
+
+            state = self.water.get_state()
+            pos = state.pos.cpu().numpy()
+            vel = state.vel.cpu().numpy()
+
+            surface_mask = (pos[:, 2] > 0.1) & (pos[:, 2] < 0.3)
+            pos = pos[surface_mask]
+            vel = vel[surface_mask]
+
+            if len(pos) == 0:
+                return
+
+            x = pos[:, 0]
+            y = pos[:, 1]
+            u = vel[:, 0]
+            v = vel[:, 1]
+            speed = np.sqrt(u**2 + v**2)
+
+            # Log scale
+            log_speed = np.log(1.0 + speed) / np.log(1.05)
+
+            # Create regular grid
+            grid_x, grid_y = np.mgrid[x.min():x.max():200j, y.min():y.max():200j]
+
+            # Interpolate speed and velocity
+            grid_speed = griddata((x, y), log_speed, (grid_x, grid_y), method='cubic')
+            grid_u = griddata((x, y), u, (grid_x, grid_y), method='cubic')
+            grid_v = griddata((x, y), v, (grid_x, grid_y), method='cubic')
+
+            # Gaussian smoothing
+            grid_speed = gaussian_filter(np.nan_to_num(grid_speed), sigma=1)
+            grid_u = gaussian_filter(np.nan_to_num(grid_u), sigma=1)
+            grid_v = gaussian_filter(np.nan_to_num(grid_v), sigma=1)
+
+            self._flow_vmax = 8 # max： log（1+7.22）/ log(1.2) = 11.55, mean： log（1+0.39）/log（1.2）=1.8
+            norm_speed = np.clip(grid_speed / (self._flow_vmax + 1e-8), 0, 1)
+
+            # Plot heatmap
+            fig, ax = plt.subplots(figsize=(6, 6))
+            im = ax.imshow(norm_speed.T, origin='lower',
+                        extent=(x.min(), x.max(), y.min(), y.max()),
+                        cmap='jet', alpha=0.9,
+                        vmin=0, vmax=1)
+
+            # Quiver arrows colored by local speed
+            # local_speed = np.sqrt(grid_u**2 + grid_v**2)
+            # local_speed = gaussian_filter(local_speed, sigma=1)
+            # quiver_colors = plt.cm.jet(np.clip(local_speed / (self._flow_vmax + 1e-8), 0, 1))
+            # step = 8
+            # quiver_colors_list = quiver_colors[::step, ::step].reshape(-1, 4)
+
+            # ax.quiver(
+            #     grid_x[::step, ::step], grid_y[::step, ::step],
+            #     grid_u[::step, ::step].T, grid_v[::step, ::step].T,
+            #     color=quiver_colors_list,
+            #     pivot='middle',
+            #     scale=20
+            # )
+
+            ax.set_axis_off()
+            plt.margins(0, 0)
+            plt.subplots_adjust(0, 0, 1, 1)
+
+            frame_path = os.path.join(self.flow_frame_dir, f"frame_{self.frame_id:06d}.png")
+            plt.savefig(frame_path, dpi=150, bbox_inches='tight', pad_inches=0)
+            plt.close()
+            self.frame_id += 1
+
+        except Exception as e:
+            print(f"[WARNING] Failed to save surface speed frame: {e}")
+
+
+
+
+    def save_fluid_velocity_data(self, filename=None):
+        """保存流体速度数据到JSON文件"""
+        if not self.record or self.fluid_velocity_buffer is None:
+            return
+
+        if len(self.fluid_velocity_buffer) == 0:
+            print("[WARNING] No fluid velocity data to save")
+            return
+
+        if filename is None:
+            import time
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            filename = f"fluid_velocity_{timestamp}.json"
+
+        output_path = os.path.join(self.record_dir, filename)
+
+        import json
+        with open(output_path, 'w') as f:
+            json.dump({
+                "metadata": {
+                    "sim_dt": self.SIM_DT,
+                    "particle_size": self.PARTICLE_SIZE,
+                    "total_frames": len(self.fluid_velocity_buffer),
+                    "total_time": self.sim_time,
+                },
+                "frames": self.fluid_velocity_buffer
+            }, f, indent=2)
+
+        print(f"[INFO] Fluid velocity data saved: {output_path}")
+        return output_path
+
+    def reset_fluid_velocity_buffer(self):
+        """重置流体速度数据缓冲区（用于新的episode）"""
+        if self.record:
+            self.fluid_velocity_buffer = []
+
+    def stop_recording(self):
+        """Stop camera recording & generate fluid speed video."""
+        if self.record and self.camera and self.video_path:
+            fps = int(1.0 / self.SIM_DT)
+            self.camera.stop_recording(save_to_filename=self.video_path, fps=fps)
+            print(f"[INFO] Video recording saved to: {self.video_path}")
+
+        # Build fluid-speed MP4 video
+        if self.record and self.flow_frame_dir:
             try:
-                self.cam.render()
+                import imageio.v2 as imageio
+                flow_video_path = os.path.join(self.record_dir, "fluid_speed.mp4")
+
+                print("[INFO] Generating fluid-speed MP4...")
+
+                frames = sorted(
+                    [os.path.join(self.flow_frame_dir, f)
+                     for f in os.listdir(self.flow_frame_dir)
+                     if f.endswith(".png")]
+                )
+
+                # Write video
+                writer = imageio.get_writer(flow_video_path, fps=int(1.0/self.SIM_DT))
+                for f in frames:
+                    writer.append_data(imageio.imread(f))
+                writer.close()
+
+                print(f"[INFO] Fluid speed video saved: {flow_video_path}")
+
             except Exception as e:
-                print(f"Camera render error during CPG control: {e}")
-                # Don't disable camera immediately, try to continue
-                pass
-        
-        # Record end time for FPS calculation
-        step_end_time = time.time()
-        step_duration = step_end_time - step_start_time
-        current_fps = 1.0 / step_duration if step_duration > 0 else 0
-        
-        # Calculate average FPS
-        if not hasattr(self, 'fps_history'):
-            self.fps_history = []
-        self.fps_history.append(current_fps)
-        if len(self.fps_history) > 100:  # Keep only last 100 FPS measurements
-            self.fps_history.pop(0)
-        avg_fps = np.mean(self.fps_history)
-        
-        # Print FPS occasionally
-        if self.step_count % 50 == 0:  # Print every 50 steps
-            print(f"Step {self.step_count}: FPS = {current_fps:.2f}, Avg FPS = {avg_fps:.2f}")
-        
-        # Log robot position
+                print(f"[ERROR] Failed to generate fluid-speed video: {e}")
+
+    def run(self, duration=3.0, freq=1.0, amp_deg=45.0):
+        dt = self.SIM_DT
+        link_num = 7
+        num_joint = link_num - 1
+        amplitude = np.deg2rad(amp_deg)
+        bias = np.zeros(num_joint)
+        joint_phases = np.linspace(1 / link_num, (link_num - 1) / link_num, num_joint)
+
+        # Generate control trajectory
+        T_control = np.arange(0.0, duration, dt)
+        u_traj = [amplitude * np.sin(2*np.pi*(freq*t + joint_phases)) + bias for t in T_control]
+
+        trajectory_xyz = []
+
+        # Main loop
+        for qpos in u_traj:
+            self.robot.control_dofs_position(qpos, self.dofs_idx)
+            self.step_simulation()  # 使用新的step方法
+            trajectory_xyz.append(self.get_base_xyz())
+
+        trajectory_xyz = np.array(trajectory_xyz)
+
+        # Save trajectory
+        save_path = os.path.expanduser("~/robot_xyz_trajectory.npy")
+        np.save(save_path, trajectory_xyz)
+        print(f"[INFO] Trajectory saved at: {save_path}")
+
+        # Print stats (保持原有的信息输出)
+        self._print_stats()
+
+    def _print_stats(self):
+        """打印仿真统计信息"""
         try:
-            if hasattr(self, 'robot'):
-                pos, _ = self.get_entity_pose(self.robot)
-                self.robot_positions_log.append(pos.copy())
-                # Debug: Print robot position occasionally
-                if self.step_count % 25 == 0:  # Print every 25 steps
-                    print(f"Step {self.step_count}: Robot position: x={pos[0]:.3f}, y={pos[1]:.3f}, z={pos[2]:.3f}")
-            else:
-                self.robot_positions_log.append(np.zeros(3))
-        except Exception as e:
-            self.robot_positions_log.append(np.zeros(3))
+            print("Genesis version:", gs.__version__)
+        except:
+            pass
         
-        # Log joint angles
-        self.joint_angles_log.append(desired_joint_angles.copy())
+        print("=== Scene Integrator ===")
+        print("dt(actual):", self.scene.sim_options.dt)
+        print("substeps(actual):", self.scene.sim_options.substeps)
         
-        self.step_count += 1
-        
-        return desired_joint_angles
-    
-    def get_entity_pose(self, entity):
-        """Get entity pose (position and rotation matrix) - exactly like run_cpg_gs_old.py."""
-        try:
-            if hasattr(entity, "world_pos") and hasattr(entity, "world_quat"):
-                pos = np.array(entity.world_pos, dtype=float)
-                quat = np.array(entity.world_quat, dtype=float)
-                if pos.shape[0] == 3 and quat.shape[0] == 4:
-                    return pos, self._quat_to_rot(quat)
-            
-            # Fallback to default
-            return np.array([0.0, 0.0, 0.2], dtype=float), np.eye(3)
-        except Exception as e:
-            print(f"[WARN] Error getting entity pose: {e}")
-            return np.array([0.0, 0.0, 0.2], dtype=float), np.eye(3)
-    
-    def _quat_to_rot(self, q):
-        """Convert quaternion to rotation matrix - exactly like run_cpg_gs_old.py."""
-        q = np.array(q, dtype=float).flatten()
-        if q.shape[0] != 4:
-            raise ValueError("Quaternion must have 4 elements")
-        
-        x, y, z, w = q[0], q[1], q[2], q[3]
-        xx, yy, zz = x*x, y*y, z*z
-        xy, xz, yz = x*y, x*z, y*z
-        wx, wy, wz = w*x, w*y, w*z
-        
-        R = np.array([
-            [1 - 2*(yy + zz),     2*(xy - wz),       2*(xz + wy)],
-            [2*(xy + wz),         1 - 2*(xx + zz),   2*(yz - wx)],
-            [2*(xz - wy),         2*(yz + wx),       1 - 2*(xx + yy)],
-        ])
-        return R
-    
-    def run_simulation(self, duration=10.0, log_every=10):
-        """Run the simulation for specified duration."""
-        total_steps = int(duration / self.SIM_DT)
-        
-        print(f"Running {self.model_name} simulation...")
-        print(f"Simulation duration: {duration} seconds ({total_steps} steps)")
-        print(f"CPG model type: {self.cpg_model_type}")
-        
-        try:
-            for step in range(total_steps):
-                # Step simulation with CPG control
-                joint_angles = self.step()
-                
-                # Log data
-                if step % log_every == 0:
-                    current_time = step * self.SIM_DT
-                    # Log joint angles
-                    self.joint_angles_log.append(joint_angles.copy())
-                    
-                    # Get robot state
-                    try:
-                        if hasattr(self, 'robot'):
-                            pos, _ = self.get_entity_pose(self.robot)
-                            self.robot_positions_log.append(pos.copy())
-                        else:
-                            self.robot_positions_log.append(np.zeros(3))
-                    except Exception as e:
-                        self.robot_positions_log.append(np.zeros(3))
-                    
-                    # Log CPG output
-                    self.cpg_output_log.append(joint_angles.copy())
-                
-                # Print progress
-                if step % 200 == 0:  # Less frequent progress updates for speed
-                    progress = (step / total_steps) * 100
-                    current_time = step * self.SIM_DT
-                    print(f"Simulation progress: {progress:.0f}% - Time: {current_time:.2f}s")
-        except KeyboardInterrupt:
-            print(f"\nSimulation interrupted at step {step}/{total_steps}")
-            print("Saving collected data...")
-            
-            # Stop video recording immediately
-            if self.record_video and hasattr(self, 'cam'):
-                try:
-                    print("Stopping video recording due to interruption...")
-                    # Try simple stop_recording first
-                    self.cam.stop_recording()
-                    print("Video recording stopped successfully!")
-                except Exception as e:
-                    print(f"Error stopping video recording: {e}")
-                    
-        # Stop video recording (exactly like run_cpg_gs_old.py)
-        if self.record_video and self.cam is not None:
-            try:
-                print("Stopping video recording...")
-                # Try simple stop_recording first
-                self.cam.stop_recording()
-                print("Video recording stopped successfully!")
-            except Exception as e:
-                print(f"Error stopping recording: {e}")
-                print("Trying alternative save method...")
-                try:
-                    # Try with filename parameter
-                    self.cam.stop_recording(
-                        save_to_filename=f"outputs/{self.model_name}_simulation.mp4"
-                    )
-                    print(f"Video saved to outputs/{self.model_name}_simulation.mp4")
-                except Exception as e2:
-                    print(f"Alternative save method also failed: {e2}")
-        
-        print(f"Simulation completed after {self.step_count} steps")
-    
-    def plot_results(self):
-        """Plot simulation results."""
-        try:
-            print("Generating plots...")
-            
-            # Convert logs to numpy arrays
-            joint_angles = np.array(self.joint_angles_log)
-            robot_positions = np.array(self.robot_positions_log)
-            cpg_output = np.array(self.cpg_output_log)
-            
-            # Create time array
-            t = np.arange(len(joint_angles)) * self.SIM_DT
-            
-            # Create subplots
-            fig, axes = plt.subplots(2, 2, figsize=(15, 10))
-            fig.suptitle(f'Genesis Swimming Simulation Results - {self.model_name.upper()}', fontsize=16)
-            
-            # Plot 1: Joint angles over time
-            for i in range(min(7, joint_angles.shape[1])):
-                axes[0, 0].plot(t, joint_angles[:, i], label=f'Joint {i+1}', alpha=0.7)
-            axes[0, 0].set_title('Joint Angles Over Time')
-            axes[0, 0].set_xlabel('Time (s)')
-            axes[0, 0].set_ylabel('Angle (rad)')
-            axes[0, 0].legend()
-            axes[0, 0].grid(True)
-            
-            # Plot 2: Robot X position
-            if len(robot_positions) > 0:
-                # robot_positions is [time_steps, xyz] (single robot position)
-                axes[1, 0].plot(t, robot_positions[:, 0], label='Robot X')
-            axes[1, 0].set_title('Robot X Position')
-            axes[1, 0].set_xlabel('Time (s)')
-            axes[1, 0].set_ylabel('X Position (m)')
-            axes[1, 0].legend()
-            axes[1, 0].grid(True)
-            
-            # Plot 3: Robot Z position
-            if len(robot_positions) > 0:
-                # robot_positions is [time_steps, xyz] (single robot position)
-                axes[0, 1].plot(t, robot_positions[:, 2], label='Robot Z')
-            axes[0, 1].set_title('Robot Z Position')
-            axes[0, 1].set_xlabel('Time (s)')
-            axes[0, 1].set_ylabel('Z Position (m)')
-            axes[0, 1].legend()
-            axes[0, 1].grid(True)
-            
-            # Plot 4: Robot movement (X-Z plane)
-            if len(robot_positions) > 0:
-                # robot_positions is [time_steps, xyz] (single robot position)
-                axes[1, 1].plot(robot_positions[:, 0], robot_positions[:, 2], label='Robot', alpha=0.7)
-            axes[1, 1].set_title('Robot Movement (X-Z Plane)')
-            axes[1, 1].set_xlabel('X Position (m)')
-            axes[1, 1].set_ylabel('Z Position (m)')
-            axes[1, 1].legend()
-            axes[1, 1].grid(True)
-            axes[1, 1].axis('equal')
-            
-            plt.tight_layout()
-            
-            # Save plot
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            plot_filename = f"outputs/plot_{self.model_name}_{timestamp}.png"
-            plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
-            print(f"✓ Plot saved as: {plot_filename}")
-            
-            plt.show()
-            
-        except Exception as e:
-            print(f"Error generating plots: {e}")
-            import traceback
-            traceback.print_exc()
+        if self.disturbance:
+            print("\n=== Paddle Disturbance ===")
+            print(f"Status: ENABLED")
+            print(f"Paddles: {self.disturbance.n_paddles}")
+            print(f"Total simulation time: {self.sim_time:.2f}s")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-v", "--vis", action="store_true", help="Enable visualization")
+    parser.add_argument("--disturbance", action="store_true", help="Enable paddle disturbance")
+    args = parser.parse_args()
+
+    # config paddle disturbance
+    disturbance_config = {
+        'n_paddles': 6,
+        'oscillation_freq': 1.5,
+        'oscillation_amplitude': 0.10,
+        'paddle_size': (0.15, 0.15, 0.05),
+        'paddle_mass': 2000.0,
+        'swim_zone': (0.6, 0.9),
+    }
+
+    sim = GenesisSwimmingSimulation(
+        vis=args.vis, 
+        enable_disturbance=args.disturbance,
+        disturbance_config=disturbance_config if args.disturbance else None
+    )
+    sim.run(duration=3.0, freq=1.0, amp_deg=45.0)
