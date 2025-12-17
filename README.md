@@ -2,6 +2,9 @@
 
 Hybrid control for a swimming robot: **CPG (Central Pattern Generator)** and **RL (PPO)**. The simulator is built on **Genesis SPH** and is configured to run on **CUDA** and **macOS (Metal)** as well as other platforms.
 
+<img width="1139" height="541" alt="image" src="https://github.com/user-attachments/assets/6ec5ad59-c521-44a8-b54c-a909d3ec052c" />
+
+
 ## Features
 
 - **Hybrid Control**: CPG + PPO modulation
@@ -97,4 +100,5 @@ This repo treats `wandb` as optional. If you want W&B logging:
 ```bash
 pip install wandb
 ```
+
 
